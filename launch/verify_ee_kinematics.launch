@@ -1,0 +1,15 @@
+<launch>
+    <!-- Load Robot Description if not already loaded (Optional, usually loaded by driver) -->
+    <!-- <param name="robot_description" command="$(find xacro)/xacro '$(find your_robot_description)/urdf/your_robot.urdf.xacro'" /> -->
+
+    <node pkg="iparam_identification" type="verify_ee_kinematics_node.py" name="verify_ee_kinematics_node" output="screen">
+        <remap from="/joint_states" to="/joint_states" />
+
+        <!-- Robot configuration -->
+        <param name="base_link" value="base_link"/>
+        <param name="ee_link" value="tool0"/>
+
+        <!-- Filter parameters -->
+        <param name="cutoff_freq" value="10.0"/>
+    </node>
+</launch>
