@@ -3,6 +3,7 @@ import rospy
 import numpy as np
 import sys
 from geometry_msgs.msg import Vector3
+from scipy import constants
 from sensor_msgs.msg import JointState
 from iparam_identification.dynamics_utils import compute_body_twist_and_derivative
 from iparam_identification.numerical_differentiator import NumericalDifferentiator
@@ -19,6 +20,7 @@ class WristEndKinematicsNode:
         self.base_link = rospy.get_param("~base_link", "base_link")
         self.ee_link = rospy.get_param("~ee_link", "tool0")
         self.cutoff_freq = rospy.get_param("~cutoff_freq", 10.0)
+        self.gravity = np.array(rospy.get_param("~gravity", [0.0, 0.0, -constants.g]))
 
         # Publishers
         self.pub_lv = rospy.Publisher("~lv_tool0", Vector3, queue_size=10)
@@ -63,6 +65,7 @@ class WristEndKinematicsNode:
                         self.joint_positions, self.joint_velocities
                     )
                 )
+                # Debug output
                 acc_base_tool0 = self.vel_diff.update(vel_base_tool0, t)
 
                 # Get pose_base_tool0 to transform velocity to tool0 frame
@@ -82,22 +85,23 @@ class WristEndKinematicsNode:
                 av_tool0 = rot_tool0_base @ av_base_tool0
 
                 # Coordinate-transform the accelecations from base to tool0
-                if acc_base_tool0 is not None:
-                    la_base_tool0 = acc_base_tool0[:3]
-                    aa_base_tool0 = acc_base_tool0[3:]
+                la_base_tool0_kinematic = acc_base_tool0[:3]
+                aa_base_tool0 = acc_base_tool0[3:]
 
-                    # Angular acceleration: R^T * alpha_s
-                    aa_tool0 = rot_tool0_base @ aa_base_tool0
+                # Proper acceleration: a_proper = a_kinematic - g
+                # This adds +9.81 upwards if g = [0, 0, -constants.g]
+                # NOTE: Do NOT use -= operator on a slice of acc_base_tool0, as it
+                # modifies the differentiator's internal state in-place!
+                la_base_tool0 = la_base_tool0_kinematic - self.gravity
 
-                    # Linear acceleration: R^T * a_s - w_b x v_b (Coriolis/Convective term)
-                    coriolis_term = (
-                        rot_tool0_base @ SO3.wedge(av_base_tool0) @ lv_base_tool0
-                    )
-                    la_tool0 = rot_tool0_base @ la_base_tool0 - coriolis_term
+                # Angular acceleration: R^T * alpha_s
+                aa_tool0 = rot_tool0_base @ aa_base_tool0
 
-                else:
-                    la_tool0 = np.zeros(3)
-                    aa_tool0 = np.zeros(3)
+                # Linear acceleration: R^T * a_proper - w_b x v_b (Coriolis/Convective term)
+                coriolis_term = (
+                    rot_tool0_base @ SO3.wedge(av_base_tool0) @ lv_base_tool0
+                )
+                la_tool0 = rot_tool0_base @ la_base_tool0 - coriolis_term
 
                 # Publish messages
                 self.pub_lv.publish(Vector3(*lv_tool0))
