@@ -3,12 +3,16 @@ import rospy
 import numpy as np
 import sys
 from geometry_msgs.msg import Vector3
+from std_msgs.msg import Float64MultiArray
 from scipy import constants
 from sensor_msgs.msg import JointState
-from iparam_identification.dynamics_utils import compute_body_twist_and_derivative
 from iparam_identification.numerical_differentiator import NumericalDifferentiator
+from iparam_identification.wrist_end_kinematics_utils import (
+    coordinate_transform_linang_velacc,
+    get_pose,
+    get_regressor_matrix,
+)
 from ur_pykdl.ur_pykdl import ur_kinematics
-from pymlg import SE3, SO3
 
 from iparam_identification.joint_state_utils import process_joint_state_msg
 
@@ -27,8 +31,11 @@ class WristEndKinematicsNode:
         self.pub_av = rospy.Publisher("~av_tool0", Vector3, queue_size=10)
         self.pub_la = rospy.Publisher("~la_tool0", Vector3, queue_size=10)
         self.pub_aa = rospy.Publisher("~aa_tool0", Vector3, queue_size=10)
+        self.pub_regressor = rospy.Publisher(
+            "~regressor", Float64MultiArray, queue_size=10
+        )
 
-        self.kinematics = ur_kinematics(base_link=self.base_link, ee_link=self.ee_link)
+        self.kin = ur_kinematics(base_link=self.base_link, ee_link=self.ee_link)
         self.vel_diff = NumericalDifferentiator(cutoff_freq=self.cutoff_freq)
 
         self.joint_positions = None
@@ -61,53 +68,39 @@ class WristEndKinematicsNode:
 
                 # Get velocity in base frame (dp, w)
                 vel_base_tool0 = np.array(
-                    self.kinematics.forward_velocity(
+                    self.kin.forward_velocity(
                         self.joint_positions, self.joint_velocities
                     )
                 )
-                # Debug output
                 acc_base_tool0 = self.vel_diff.update(vel_base_tool0, t)
 
-                # Get pose_base_tool0 to transform velocity to tool0 frame
-                _pose_base_tool0 = self.kinematics.forward_position_kinematics(
+                # Get rot_base_tool0 to transform velocity to tool0 frame
+                _pose_base_tool0 = self.kin.forward_position_kinematics(
                     self.joint_positions
                 )
-                quat_base_tool0 = np.array(_pose_base_tool0[3:])
-                # ur_pykdl returns [x, y, z, w] while pymlg.SO3 use "wxyz" as default
-                rot_base_tool0 = SO3.from_quat(quat_base_tool0, order="xyzw")
-                rot_tool0_base = rot_base_tool0.T  # Transpose (inverse)
 
-                # Coordinate-transform the velocities from base to tool0
-                lv_base_tool0 = vel_base_tool0[:3]
-                av_base_tool0 = vel_base_tool0[3:]
+                rot_tool0_base = get_pose(_pose_base_tool0, inverse=True, only_rot=True)
 
-                lv_tool0 = rot_tool0_base @ lv_base_tool0
-                av_tool0 = rot_tool0_base @ av_base_tool0
-
-                # Coordinate-transform the accelecations from base to tool0
-                la_base_tool0_kinematic = acc_base_tool0[:3]
-                aa_base_tool0 = acc_base_tool0[3:]
-
-                # Proper acceleration: a_proper = a_kinematic - g
-                # This adds +9.81 upwards if g = [0, 0, -constants.g]
-                # NOTE: Do NOT use -= operator on a slice of acc_base_tool0, as it
-                # modifies the differentiator's internal state in-place!
-                la_base_tool0 = la_base_tool0_kinematic - self.gravity
-
-                # Angular acceleration: R^T * alpha_s
-                aa_tool0 = rot_tool0_base @ aa_base_tool0
-
-                # Linear acceleration: R^T * a_proper - w_b x v_b (Coriolis/Convective term)
-                coriolis_term = (
-                    rot_tool0_base @ SO3.wedge(av_base_tool0) @ lv_base_tool0
+                lv_tool0, av_tool0, la_tool0, aa_tool0 = (
+                    coordinate_transform_linang_velacc(
+                        rot_tool0_base, vel_base_tool0, acc_base_tool0, self.gravity
+                    )
                 )
-                la_tool0 = rot_tool0_base @ la_base_tool0 - coriolis_term
+
+                # Construct Regressor Matrix (Shape: 6x10)
+                regressor = get_regressor_matrix(
+                    linear_acc=la_tool0, angular_vel=av_tool0, angular_acc=aa_tool0
+                )
 
                 # Publish messages
                 self.pub_lv.publish(Vector3(*lv_tool0))
                 self.pub_av.publish(Vector3(*av_tool0))
                 self.pub_la.publish(Vector3(*la_tool0))
                 self.pub_aa.publish(Vector3(*aa_tool0))
+
+                regressor_msg = Float64MultiArray()
+                regressor_msg.data = regressor.flatten().tolist()
+                self.pub_regressor.publish(regressor_msg)
 
             rate.sleep()
 
