@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ROS
+results/
+*.bag
+*.json
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints

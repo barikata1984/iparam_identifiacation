@@ -1,0 +1,19 @@
+<launch>
+    <!-- Arguments -->
+    <arg name="base_link" default="base_link" />
+    <arg name="ee_link" default="tool0" />
+    <arg name="wrench_topic" default="/wrench" />
+    <arg name="cutoff_freq" default="10.0" />
+
+    <!-- Wrist End Kinematics Node (Prerequisite) -->
+    <include file="$(find iparam_identification)/launch/wrist_end_kinematics.launch">
+        <arg name="base_link" value="$(arg base_link)" />
+        <arg name="ee_link" value="$(arg ee_link)" />
+        <arg name="cutoff_freq" value="$(arg cutoff_freq)" />
+    </include>
+
+    <!-- Batch Identifier Node (Interactive CLI) -->
+    <node pkg="iparam_identification" type="batch_identifier.py" name="batch_identifier" output="screen">
+        <param name="wrench_topic" value="$(arg wrench_topic)" />
+    </node>
+</launch>
