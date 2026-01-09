@@ -7,7 +7,7 @@ import os
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped, Vector3
 from std_msgs.msg import Float64MultiArray
-from identifiers.recursive_tls import solve_tls_batch
+from identifiers.tls import solve_tls_compare, print_tls_comparison
 import matplotlib.pyplot as plt
 import datetime
 
@@ -192,16 +192,41 @@ class BatchIdentifierNode:
             print(f"OLS Failed: {e}")
             pi_ols = np.zeros(10)
 
-        # TLS
-        print("Solving TLS...")
-        try:
-            pi_tls, s_min = solve_tls_batch(S_total, W_total)
-            print("TLS Result:")
+        # TLS with multiple scaling modes for comparison
+        print("Solving TLS with different scaling modes...")
+        tls_results = solve_tls_compare(S_total, W_total)
+
+        # Print comparison
+        param_names = [
+            "m",
+            "mcx",
+            "mcy",
+            "mcz",
+            "Ixx",
+            "Iyy",
+            "Izz",
+            "Ixy",
+            "Iyz",
+            "Izx",
+        ]
+        print_tls_comparison(tls_results, param_names)
+
+        # Use COLUMN_ONLY as the primary TLS result
+        if tls_results.get("column") is not None:
+            pi_tls = tls_results["column"].x
+            s_min = tls_results["column"].sigma_min
+            print("TLS (column scaling) Result:")
             print(pi_tls)
             print(f"Min Singular Value: {s_min}")
-        except Exception as e:
-            print(f"TLS Failed: {e}")
-            pi_tls = np.zeros(10)
+        else:
+            print("TLS (column scaling) Failed, trying no scaling...")
+            if tls_results.get("none") is not None:
+                pi_tls = tls_results["none"].x
+                s_min = tls_results["none"].sigma_min
+            else:
+                print("All TLS methods failed.")
+                pi_tls = np.zeros(10)
+                s_min = 0.0
 
         # Export JSON
         output_data = {

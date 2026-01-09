@@ -106,7 +106,7 @@ def get_regressor_matrix(linear_acc, angular_vel, angular_acc):
     -------
     np.ndarray
         6x10 regressor matrix.
-        Columns correspond to: [m, hx, hy, hz, Ixx, Iyy, Izz, Ixy, Ixz, Iyz]
+        Columns correspond to: [m, hx, hy, hz, Ixx, Iyy, Izz, Ixy, Iyz, Izx]
     """
     ax, ay, az = linear_acc
     wx, wy, wz = angular_vel
@@ -168,8 +168,8 @@ def get_regressor_matrix(linear_acc, angular_vel, angular_acc):
         -wy * wz,  # Iyy
         wy * wz,  # Izz
         aly - wx * wz,  # Ixy
-        alz + wx * wy,  # Ixz
         wy2 - wz2,  # Iyz
+        alz + wx * wy,  # Izx
     ]
 
     # Row 5 (Ny)
@@ -182,8 +182,8 @@ def get_regressor_matrix(linear_acc, angular_vel, angular_acc):
         alx + wy * wz,  # Iyy
         -wx * wz,  # Izz
         aly,  # Ixy
-        alz - wx * wy,  # Ixz
         wz2 - wx2,  # Iyz
+        alz - wx * wy,  # Izx
     ]
 
     # Row 6 (Nz)
@@ -196,8 +196,8 @@ def get_regressor_matrix(linear_acc, angular_vel, angular_acc):
         wx * wy,  # Iyy
         alz,  # Izz
         alx - wy * wz,  # Ixy
-        aly + wx * wz,  # Ixz
         wz2 - wy2,  # Iyz
+        aly + wx * wz,  # Izx
     ]
 
     return np.array([row1, row2, row3, row4, row5, row6])
