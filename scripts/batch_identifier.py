@@ -6,7 +6,7 @@ import json
 import os
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped, Vector3
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension, Bool
 from identifiers.tls import solve_tls_compare, print_tls_comparison
 import matplotlib.pyplot as plt
 import datetime
@@ -64,10 +64,36 @@ class BatchIdentifierNode:
         )
         self.ts.registerCallback(self.callback)
 
+        # Publisher for inertia parameters (10 elements)
+        self.inertia_pub = rospy.Publisher(
+            "~inertia_params", Float64MultiArray, queue_size=1, latch=True
+        )
+
+        # Publisher for identification status
+        self.identified_pub = rospy.Publisher(
+            "~iparams_identified", Bool, queue_size=1, latch=True
+        )
+
+        # Parameter names for display
+        self.param_names = [
+            "m",
+            "mcx",
+            "mcy",
+            "mcz",
+            "Ixx",
+            "Iyy",
+            "Izz",
+            "Ixy",
+            "Iyz",
+            "Izx",
+        ]
+
         rospy.loginfo("Batch Identifier Node Initialized.")
         rospy.loginfo(
             f"Subscribing to {self.wrench_topic} and /wrist_end_kinematics/..."
         )
+        rospy.loginfo("Publishing inertia params to: ~inertia_params")
+        rospy.loginfo("Publishing identification status to: ~iparams_identified")
 
     def callback(self, joint_msg, wrench_msg, lv_msg, av_msg, la_msg, aa_msg, reg_msg):
         if not self.is_recording:
@@ -115,6 +141,108 @@ class BatchIdentifierNode:
 
         self.recorded_frames.append(frame)
 
+    def plot_wrench_data(self, wrench_data, results_dir):
+        """Plot F/T data with each component as separate series.
+
+        Uses the same style as friction_identifier (alternating background stripes).
+        """
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+
+        n_points = len(wrench_data)
+        indices = np.arange(n_points)
+
+        # Extract force and torque components
+        wrench = np.array(wrench_data)
+        force = wrench[:, :3]  # Fx, Fy, Fz
+        torque = wrench[:, 3:]  # Tx, Ty, Tz
+
+        # Alternating background stripes (5 sets = 10 stripes)
+        stripe_width = n_points / 10
+        for ax in [ax1, ax2]:
+            for i in range(10):
+                if i % 2 == 1:
+                    ax.axvspan(
+                        i * stripe_width,
+                        (i + 1) * stripe_width,
+                        alpha=0.15,
+                        color="lightblue",
+                        zorder=0,
+                    )
+
+        # Plot force components
+        ax1.scatter(indices, force[:, 0], c="red", s=8, alpha=0.7, label="Fx")
+        ax1.scatter(indices, force[:, 1], c="green", s=8, alpha=0.7, label="Fy")
+        ax1.scatter(indices, force[:, 2], c="blue", s=8, alpha=0.7, label="Fz")
+        ax1.set_ylabel("Force (N)", fontsize=10)
+        ax1.set_title("Force", fontsize=12)
+        ax1.legend(loc="upper right", fontsize=8)
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xlim(0, n_points)
+
+        # Plot torque components
+        ax2.scatter(indices, torque[:, 0], c="red", s=8, alpha=0.7, label="Tx")
+        ax2.scatter(indices, torque[:, 1], c="green", s=8, alpha=0.7, label="Ty")
+        ax2.scatter(indices, torque[:, 2], c="blue", s=8, alpha=0.7, label="Tz")
+        ax2.set_xlabel("Sample Index", fontsize=10)
+        ax2.set_ylabel("Torque (Nm)", fontsize=10)
+        ax2.set_title("Torque", fontsize=12)
+        ax2.legend(loc="upper right", fontsize=8)
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xlim(0, n_points)
+
+        plt.tight_layout()
+
+        # Save plot
+        plot_path = os.path.join(results_dir, "wrench_scatter.png")
+        fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+        rospy.loginfo(f"Saved wrench plot: {plot_path}")
+
+        plt.show(block=False)
+        plt.pause(0.5)
+
+        return fig
+
+    def get_range_input(self):
+        """Get lower and upper bound percentages from user."""
+        while True:
+            try:
+                print("\n" + "=" * 60)
+                user_input = input(
+                    "Enter lower and upper bounds (format: lower upper) > "
+                ).strip()
+                print("=" * 60)
+
+                parts = user_input.split()
+                if len(parts) != 2:
+                    print(
+                        "Invalid format. Please enter two numbers separated by space."
+                    )
+                    continue
+
+                lower = float(parts[0])
+                upper = float(parts[1])
+
+                if not (0 <= lower < upper <= 100):
+                    print("Invalid range. Lower must be < upper, both in [0, 100].")
+                    continue
+
+                return lower, upper
+
+            except ValueError:
+                print("Invalid input. Please enter numeric values.")
+
+    def publish_inertia_params(self, params):
+        """Publish inertia parameters as Float64MultiArray and set identified flag."""
+        msg = Float64MultiArray()
+        msg.data = params.tolist()
+        self.inertia_pub.publish(msg)
+
+        # Publish identification status
+        self.identified_pub.publish(Bool(True))
+
+        rospy.loginfo("Published inertia parameters")
+        rospy.loginfo("Published iparams_identified = True")
+
     def run_cli(self):
         print("Batch Identifier CLI")
         print("--------------------")
@@ -132,12 +260,164 @@ class BatchIdentifierNode:
             self.is_recording = False
             print(f"Stopped. Captured {len(self.recorded_frames)} frames.")
 
-            if len(self.recorded_frames) > 0:
-                self.process_data()
-            else:
+            if len(self.recorded_frames) == 0:
                 print("No data recorded.")
+                continue
 
-            print("Ready for next batch.")
+            # Process data with interactive workflow
+            accepted = self.process_data_interactive()
+
+            if accepted:
+                print("Inertia parameters published. Node continues running.")
+                print("Press Ctrl+C to exit.")
+                rospy.spin()
+                break
+            else:
+                print("Ready for next batch.")
+
+    def process_data_interactive(self):
+        """Interactive data processing with plot, range selection, and confirmation.
+
+        Returns:
+            True if user accepted and params were published, False otherwise
+        """
+        import rospkg
+
+        print("Processing data...")
+
+        # Prepare results directory
+        rospack = rospkg.RosPack()
+        package_path = rospack.get_path("iparam_identification")
+        timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        dirname = f"batch_id_{timestamp_str}"
+        results_dir = os.path.join(package_path, "results", dirname)
+        os.makedirs(results_dir, exist_ok=True)
+
+        # Prepare data
+        start_time = self.recorded_frames[0]["time"]
+        export_frames = []
+        wrench_data = []
+
+        for frame in self.recorded_frames:
+            rel_time = frame["time"] - start_time
+            ex_frame = frame.copy()
+            ex_frame["time"] = rel_time
+            export_frames.append(ex_frame)
+            wrench_data.append(frame["wrench"])
+
+        # Plot wrench data with friction_identifier style
+        fig = self.plot_wrench_data(wrench_data, results_dir)
+
+        # Get range from user
+        print("\n" + "=" * 60)
+        print("Specify the data range for inertia parameter regression")
+        lower_pct, upper_pct = self.get_range_input()
+
+        # Extract subset of data within range
+        n_frames = len(export_frames)
+        lower_idx = int(n_frames * lower_pct / 100)
+        upper_idx = int(n_frames * upper_pct / 100)
+
+        subset_frames = export_frames[lower_idx:upper_idx]
+
+        if len(subset_frames) < 2:
+            print("Not enough data points in selected range.")
+            plt.close(fig)
+            return False
+
+        print(f"Using {len(subset_frames)} frames ({lower_pct}% - {upper_pct}%)")
+
+        # Build regressor and wrench matrices from subset
+        S_list = []
+        W_list = []
+        for frame in subset_frames:
+            S_list.append(np.array(frame["regressor"]))
+            W_list.append(np.array(frame["wrench"]))
+
+        S_total = np.vstack(S_list)  # (6*N, 10)
+        W_total = np.hstack(W_list)  # (6*N,)
+
+        print(f"Constructed S matrix shape: {S_total.shape}")
+        print(f"Constructed W vector shape: {W_total.shape}")
+
+        # Solve OLS
+        print("Solving OLS...")
+        try:
+            pi_ols, _, rank, _ = np.linalg.lstsq(S_total, W_total, rcond=None)
+        except Exception as e:
+            print(f"OLS Failed: {e}")
+            pi_ols = np.zeros(10)
+            rank = 0
+
+        # Solve TLS
+        print("Solving TLS...")
+        tls_results = solve_tls_compare(S_total, W_total)
+
+        # Get best TLS result (column scaling preferred)
+        if tls_results.get("column") is not None:
+            pi_tls = tls_results["column"].x
+        elif tls_results.get("none") is not None:
+            pi_tls = tls_results["none"].x
+        else:
+            pi_tls = np.zeros(10)
+
+        plt.close(fig)
+
+        # Show results
+        print("\n" + "=" * 60)
+        print("INERTIA PARAMETER ESTIMATION RESULTS")
+        print("=" * 60)
+        print(
+            f"\nData range: {lower_pct}% - {upper_pct}% ({len(subset_frames)} frames)"
+        )
+        print(f"Matrix rank: {rank}")
+        print("\n{:10s} {:>15s} {:>15s}".format("Param", "OLS", "TLS"))
+        print("-" * 42)
+        for i, name in enumerate(self.param_names):
+            print(f"{name:10s} {pi_ols[i]:>15.6f} {pi_tls[i]:>15.6f}")
+        print("=" * 60)
+        print(f"\nTopic to publish: /batch_identifier/inertia_params")
+        print("(Using TLS column-scaling result)")
+        print("=" * 60)
+
+        # Ask for confirmation
+        while True:
+            response = (
+                input("\nAccept these results and publish? (y/n) > ").strip().lower()
+            )
+            if response in ["y", "yes"]:
+                # Save results
+                output_data = {
+                    "meta": {
+                        "timestamp": str(rospy.Time.now()),
+                        "count": len(subset_frames),
+                        "range_lower_pct": lower_pct,
+                        "range_upper_pct": upper_pct,
+                    },
+                    "results": {
+                        "ols": {"params": pi_ols.tolist()},
+                        "tls": {"params": pi_tls.tolist()},
+                    },
+                    "frames": subset_frames,
+                }
+
+                save_path = os.path.join(results_dir, "result.json")
+                with open(save_path, "w") as f:
+                    json.dump(output_data, f, indent=2)
+                print(f"Saved results to {save_path}")
+
+                # Also save old-style plots
+                self.plot_results(subset_frames, results_dir)
+
+                # Publish parameters
+                self.publish_inertia_params(pi_tls)
+                return True
+
+            elif response in ["n", "no"]:
+                print("Results not accepted.")
+                return False
+            else:
+                print("Please enter 'y' or 'n'.")
 
     def process_data(self):
         print("Processing data...")
