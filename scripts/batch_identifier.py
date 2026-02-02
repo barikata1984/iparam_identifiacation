@@ -268,10 +268,17 @@ class BatchIdentifierNode:
             accepted = self.process_data_interactive()
 
             if accepted:
-                print("Inertia parameters published. Node continues running.")
-                print("Press Ctrl+C to exit.")
-                rospy.spin()
-                break
+                print("Inertia parameters published.")
+                print()
+                print("-" * 60)
+                print("Press ENTER to restart identification, or Ctrl+C to exit...")
+                print("-" * 60)
+                try:
+                    input()
+                    print("Restarting identification process...")
+                except EOFError:
+                    rospy.spin()
+                    break
             else:
                 print("Ready for next batch.")
 
