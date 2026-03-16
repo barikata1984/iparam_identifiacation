@@ -39,6 +39,23 @@
 
 ---
 
+## I-4: headerless メッセージ同期によるデータ不整合
+
+**発見**: 2026-03-15
+
+`replay_excitation_trajectory.py` の `ApproximateTimeSynchronizer` が headerless メッセージ (`Vector3`, `Float64MultiArray`) を受信時刻で同期するため、500Hz の kinematics コールバック間でメッセージが混在する。
+
+- `la_tool0` (proper acc) と `regressor` が異なる計算サイクルのデータを含む
+- 記録データで regressor mass 列と la が完全不一致（重力方向すら異なる）
+- `S * φ = W` の関係が原理的に成立せず、同定が破綻
+- 記録フレームレートも 49 Hz（500Hz の 1/10）で大量のフレーム欠損
+
+**影響**: I-1, I-2 修正後も 120g 物体で 55g と推定される主因
+
+**対応**: kinematics 計算を recording node 内で直接実行し、メッセージ同期を排除 → TODO 参照
+
+---
+
 ## I-3: TLS スケーリング行列がデータ分散ベース
 
 **発見**: 2026-03-12

@@ -15,7 +15,11 @@
   - `wrist_end_kinematics_utils.py` の Row 5 (Ny) と Row 6 (Nz) の交差慣性項を修正
   - `dynamics_utils.py` (Lynch & Park bullet 演算子) の正しい実装を参照
   - 検証テスト追加（omega=[1,0,0] 等で dynamics_utils と一致確認）
-- [ ] Step 3: 実機で再推定し、120g 物体に対して正常な推定値を確認
+- [ ] Step 3: メッセージ同期の排除 (I-4)
+  - recording callback 内で `Tool0KinematicsCalculator` を直接呼び出す
+  - `/joint_states` + `/wrench` の 2 トピック同期のみに簡素化
+  - kinematics node の 5 トピック subscribe を廃止
+- [ ] Step 4: 実機で再推定し、120g 物体に対して正常な推定値を確認
 
 ---
 

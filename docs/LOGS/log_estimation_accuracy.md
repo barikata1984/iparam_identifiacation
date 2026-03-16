@@ -33,6 +33,40 @@
 
 `docs/LOGS/log_tls_scaling.md` で文書化済み。データ分散ではなくノイズ分散を使うべき。
 
+## 2026-03-15: 55g 推定の原因調査（I-1, I-2 修正後）
+
+I-1, I-2 修正後も 120g 物体に対して 55g と推定。追加調査を実施。
+
+### 棄却: ツール重量姿勢バイアス仮説
+
+- ホーム姿勢と励起開始姿勢は wrist_3 のみ 90° 差（z 軸回転）
+- Pinocchio で計算: 両姿勢の g_local は完全一致 [0, 0, 9.81] m/s²
+- ツール重量バイアス = 0 N → **この仮説は棄却**
+
+### 発見: regressor と la の不整合（真の原因）
+
+記録データの regressor mass 列と la (proper acceleration) が完全不一致:
+```
+Frame 0: la = [0.148, -9.390,  0.032]  (gravity in -y)
+         reg col0 = [0.262, -0.482, 9.878]  (gravity in +z)
+```
+
+同じコールバック内で `la` から `regressor` を構築しているため、本来一致するはず。
+不一致の原因: `ApproximateTimeSynchronizer` が `allow_headerless=True` で
+headerless メッセージ (`Vector3`, `Float64MultiArray`) を受信時刻ベースで同期しているため、
+500Hz のコールバック間でメッセージが混在している。
+
+### 影響
+
+- 各フレームの regressor / wrench / la が異なる時刻のデータの混合物
+- `S * φ = W` の関係が成立せず、同定は原理的に不可能
+- フレームレートも 49 Hz（500Hz の 1/10）で大量のフレーム欠損
+
+### 対処方針
+
+kinematics node 内で全データを単一メッセージとして publish するか、
+recording node 内で直接 kinematics 計算を実行する設計に変更する必要がある。
+
 ## 2026-03-15: I-1 修正
 
 `replay_excitation_trajectory.py` の全 F/T 再ゼロ化箇所を除去。

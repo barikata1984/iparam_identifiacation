@@ -340,27 +340,38 @@ class ExcitationTrajectoryReplayNode:
         S_total = np.vstack(S_list)  # (6*N, 10)
         W_total = np.hstack(W_list)  # (6*N,)
 
+        N = len(trimmed_frames)
         print(f"  S matrix: {S_total.shape}, W vector: {W_total.shape}")
 
-        # OLS
+        # Augment regressor with constant bias columns to absorb tool weight offset.
+        # The F/T sensor was zeroed at home pose (without object), so measurements
+        # include a constant bias from tool weight at a different orientation:
+        #   F_measured = S*phi + bias
+        # where bias = m_tool * [g_local(q) - g_local(q_home)] is approximately
+        # constant over the trajectory. Adding 6 bias columns lets OLS absorb it.
+        bias_block = np.tile(np.eye(6), (N, 1))  # (6*N, 6)
+        S_aug = np.hstack([S_total, bias_block])  # (6*N, 16)
+
+        # OLS without bias (original)
         print("  Solving OLS...")
         try:
-            pi_ols, _, rank, _ = np.linalg.lstsq(S_total, W_total, rcond=None)
+            pi_ols_raw, _, rank_raw, _ = np.linalg.lstsq(S_total, W_total, rcond=None)
         except Exception as e:
             print(f"  OLS failed: {e}")
-            pi_ols = np.zeros(10)
-            rank = 0
+            pi_ols_raw = np.zeros(10)
+            rank_raw = 0
 
-        # TLS
-        print("  Solving TLS...")
-        tls_results = solve_tls_compare(S_total, W_total)
-
-        if tls_results.get("column") is not None:
-            pi_tls = tls_results["column"].x
-        elif tls_results.get("none") is not None:
-            pi_tls = tls_results["none"].x
-        else:
-            pi_tls = np.zeros(10)
+        # OLS with bias estimation
+        print("  Solving OLS+bias...")
+        try:
+            pi_aug, _, rank, _ = np.linalg.lstsq(S_aug, W_total, rcond=None)
+            pi_ols = pi_aug[:10]  # inertial parameters
+            bias_est = pi_aug[10:]  # estimated wrench bias [Fx, Fy, Fz, Tx, Ty, Tz]
+        except Exception as e:
+            print(f"  OLS+bias failed: {e}")
+            pi_ols = pi_ols_raw
+            bias_est = np.zeros(6)
+            rank = rank_raw
 
         # Display results
         print()
@@ -368,16 +379,23 @@ class ExcitationTrajectoryReplayNode:
         print("  INERTIA PARAMETER ESTIMATION RESULTS")
         print("=" * 60)
         print(f"  Data range: [{self.trim_start}s, {self.trim_end}s]")
-        print(f"  Frames used: {len(trimmed_frames)}, Rank: {rank}")
+        print(f"  Frames used: {N}, Rank: {rank}")
         print()
-        print(f"  {'Param':10s} {'OLS':>15s} {'TLS':>15s}")
+        print(f"  {'Param':10s} {'OLS+bias':>15s} {'OLS(raw)':>15s}")
         print("  " + "-" * 42)
         for i, name in enumerate(PARAM_NAMES):
-            print(f"  {name:10s} {pi_ols[i]:>15.6f} {pi_tls[i]:>15.6f}")
+            print(f"  {name:10s} {pi_ols[i]:>15.6f} {pi_ols_raw[i]:>15.6f}")
+        print()
+        bias_labels = ["Fx", "Fy", "Fz", "Tx", "Ty", "Tz"]
+        print("  Estimated wrench bias (tool weight offset):")
+        for i, label in enumerate(bias_labels):
+            print(f"    {label}: {bias_est[i]:>10.4f} {'N' if i < 3 else 'Nm'}")
         print("=" * 60)
 
         # Save results
-        results_dir = self._save_results(all_frames, trimmed_frames, pi_ols, pi_tls, rank)
+        results_dir = self._save_results(
+            all_frames, trimmed_frames, pi_ols, pi_ols_raw, rank, bias_est
+        )
         print(f"  Results saved to: {results_dir}")
 
         # Prompt to accept
@@ -398,8 +416,9 @@ class ExcitationTrajectoryReplayNode:
         all_frames: list[dict],
         trimmed_frames: list[dict],
         pi_ols: np.ndarray,
-        pi_tls: np.ndarray,
+        pi_ols_raw: np.ndarray,
         rank: int,
+        bias_est: np.ndarray = None,
     ) -> str:
         import rospkg
 
@@ -423,7 +442,8 @@ class ExcitationTrajectoryReplayNode:
             },
             "results": {
                 "ols": {"params": pi_ols.tolist()},
-                "tls": {"params": pi_tls.tolist()},
+                "ols_raw": {"params": pi_ols_raw.tolist()},
+                "wrench_bias": {"params": bias_est.tolist() if bias_est is not None else []},
             },
             "frames": trimmed_frames,
         }
