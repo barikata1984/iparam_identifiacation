@@ -172,21 +172,21 @@ def get_regressor_matrix(linear_acc, angular_vel, angular_acc):
         alz + wx * wy,  # Izx
     ]
 
-    # Row 5 (Ny)
+    # Row 5 (Ny): τ_y = I·α|_y + ω×(I·ω)|_y + h×a|_y
     row5 = [
         0,  # m
         -az,  # hx
         0,  # hy
         ax,  # hz
         wx * wz,  # Ixx
-        alx + wy * wz,  # Iyy
+        aly,  # Iyy
         -wx * wz,  # Izz
-        aly,  # Ixy
-        wz2 - wx2,  # Iyz
-        alz - wx * wy,  # Izx
+        alx + wy * wz,  # Ixy
+        alz - wx * wy,  # Iyz
+        wz2 - wx2,  # Izx
     ]
 
-    # Row 6 (Nz)
+    # Row 6 (Nz): τ_z = I·α|_z + ω×(I·ω)|_z + h×a|_z
     row6 = [
         0,  # m
         ay,  # hx
@@ -195,9 +195,9 @@ def get_regressor_matrix(linear_acc, angular_vel, angular_acc):
         -wx * wy,  # Ixx
         wx * wy,  # Iyy
         alz,  # Izz
-        alx - wy * wz,  # Ixy
-        wz2 - wy2,  # Iyz
-        aly + wx * wz,  # Izx
+        wx2 - wy2,  # Ixy
+        aly + wx * wz,  # Iyz
+        alx - wy * wz,  # Izx
     ]
 
     return np.array([row1, row2, row3, row4, row5, row6])
