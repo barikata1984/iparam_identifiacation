@@ -1,0 +1,11 @@
+<launch>
+    <!-- Launch file for pinocchio-based tool0 kinematics publisher -->
+
+    <arg name="cutoff_freq" default="10.0"/>
+    <arg name="gravity" default="[0.0, 0.0, -9.81]"/>
+
+    <node name="tool0_kinematics" pkg="iparam_identification" type="tool0_kinematics_node.py" output="screen">
+        <param name="cutoff_freq" value="$(arg cutoff_freq)"/>
+        <rosparam param="gravity" subst_value="true">$(arg gravity)</rosparam>
+    </node>
+</launch>
