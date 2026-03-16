@@ -8,11 +8,11 @@ def coordinate_transform_linang_velacc(rot, vel, acc, gravity):
 
     Parameters
     ----------
-    rot_tool0_base : np.ndarray
+    rot : np.ndarray
         3x3 rotation matrix from base to tool0
-    vel_base_tool0 : np.ndarray
+    vel : np.ndarray
         6D velocity in base frame [vx, vy, vz, wx, wy, wz]
-    acc_base_tool0 : np.ndarray
+    acc : np.ndarray
         6D acceleration in base frame [ax, ay, az, alx, aly, alz]
     gravity : np.ndarray
         Gravity vector in base frame e.g. [0, 0, -9.81]

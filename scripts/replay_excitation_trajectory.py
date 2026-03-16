@@ -40,7 +40,6 @@ import matplotlib  # noqa: E402
 import message_filters  # noqa: E402
 import rospy  # noqa: E402
 from geometry_msgs.msg import Vector3, WrenchStamped  # noqa: E402
-from identifiers.tls import solve_tls_compare  # noqa: E402
 from sensor_msgs.msg import JointState  # noqa: E402
 from src.core.terminal import check_enter_pressed  # noqa: E402
 from src.teleop.config import TeleopConfig  # noqa: E402
