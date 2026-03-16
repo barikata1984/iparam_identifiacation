@@ -1,19 +1,30 @@
 <launch>
     <!-- Arguments -->
-    <arg name="base_link" default="base_link" />
-    <arg name="ee_link" default="tool0" />
-    <arg name="wrench_topic" default="/wrench" />
-    <arg name="cutoff_freq" default="10.0" />
+    <arg name="use_pinocchio" default="true" doc="Use pinocchio-based kinematics (true) or ur_pykdl-based (false)"/>
+    <arg name="wrench_topic" default="/wrench"/>
+    <arg name="cutoff_freq" default="10.0"/>
 
-    <!-- Wrist End Kinematics Node (Prerequisite) -->
-    <include file="$(find iparam_identification)/launch/wrist_end_kinematics.launch">
-        <arg name="base_link" value="$(arg base_link)" />
-        <arg name="ee_link" value="$(arg ee_link)" />
-        <arg name="cutoff_freq" value="$(arg cutoff_freq)" />
+    <!-- Arguments for ur_pykdl-based kinematics (only used when use_pinocchio=false) -->
+    <arg name="base_link" default="base_link"/>
+    <arg name="ee_link" default="tool0"/>
+
+    <!-- Pinocchio-based Kinematics Node (default) -->
+    <include file="$(find iparam_identification)/launch/tool0_kinematics.launch" if="$(arg use_pinocchio)">
+        <arg name="cutoff_freq" value="$(arg cutoff_freq)"/>
+    </include>
+
+    <!-- ur_pykdl-based Kinematics Node (legacy) -->
+    <include file="$(find iparam_identification)/launch/wrist_end_kinematics.launch" unless="$(arg use_pinocchio)">
+        <arg name="base_link" value="$(arg base_link)"/>
+        <arg name="ee_link" value="$(arg ee_link)"/>
+        <arg name="cutoff_freq" value="$(arg cutoff_freq)"/>
     </include>
 
     <!-- Batch Identifier Node (Interactive CLI) -->
     <node pkg="iparam_identification" type="batch_identifier.py" name="batch_identifier" output="screen">
-        <param name="wrench_topic" value="$(arg wrench_topic)" />
+        <param name="wrench_topic" value="$(arg wrench_topic)"/>
+        <!-- Set kinematics namespace based on use_pinocchio flag -->
+        <param name="kinematics_ns" value="/tool0_kinematics" if="$(arg use_pinocchio)"/>
+        <param name="kinematics_ns" value="/wrist_end_kinematics" unless="$(arg use_pinocchio)"/>
     </node>
 </launch>

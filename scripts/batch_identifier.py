@@ -7,7 +7,11 @@ import os
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped, Vector3
 from std_msgs.msg import Float64MultiArray, MultiArrayDimension, Bool
+from std_srvs.srv import Trigger
 from identifiers.tls import solve_tls_compare, print_tls_comparison
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import datetime
 
@@ -17,6 +21,7 @@ class BatchIdentifierNode:
         rospy.init_node("batch_identifier", anonymous=True)
 
         self.wrench_topic = rospy.get_param("~wrench_topic", "/wrench")
+        self.kinematics_ns = rospy.get_param("~kinematics_ns", "/tool0_kinematics")
 
         # Buffer for recorded frames
         # Each frame is a dict containing synced data
@@ -27,21 +32,21 @@ class BatchIdentifierNode:
         self.sub_joint = message_filters.Subscriber("/joint_states", JointState)
         self.sub_wrench = message_filters.Subscriber(self.wrench_topic, WrenchStamped)
 
-        # Subscribers for kinematics from wrist_end_kinematics_node
+        # Subscribers for kinematics (namespace configurable via kinematics_ns param)
         self.sub_lv = message_filters.Subscriber(
-            "/wrist_end_kinematics/lv_tool0", Vector3
+            f"{self.kinematics_ns}/lv_tool0", Vector3
         )
         self.sub_av = message_filters.Subscriber(
-            "/wrist_end_kinematics/av_tool0", Vector3
+            f"{self.kinematics_ns}/av_tool0", Vector3
         )
         self.sub_la = message_filters.Subscriber(
-            "/wrist_end_kinematics/la_tool0", Vector3
+            f"{self.kinematics_ns}/la_tool0", Vector3
         )
         self.sub_aa = message_filters.Subscriber(
-            "/wrist_end_kinematics/aa_tool0", Vector3
+            f"{self.kinematics_ns}/aa_tool0", Vector3
         )
         self.sub_regressor = message_filters.Subscriber(
-            "/wrist_end_kinematics/regressor", Float64MultiArray
+            f"{self.kinematics_ns}/regressor", Float64MultiArray
         )
 
         # Synchronizer
@@ -90,7 +95,7 @@ class BatchIdentifierNode:
 
         rospy.loginfo("Batch Identifier Node Initialized.")
         rospy.loginfo(
-            f"Subscribing to {self.wrench_topic} and /wrist_end_kinematics/..."
+            f"Subscribing to {self.wrench_topic} and {self.kinematics_ns}/..."
         )
         rospy.loginfo("Publishing inertia params to: ~inertia_params")
         rospy.loginfo("Publishing identification status to: ~iparams_identified")
@@ -125,17 +130,17 @@ class BatchIdentifierNode:
         frame["regressor"] = reg_reshaped.tolist()
 
         # Wrench
-        # Force/Torque from sensor
-        # Invert wrench (sensor frame is reaction force)
+        # Force/Torque from sensor (no inversion needed for UR's built-in F/T sensor)
+        # The sensor reports the force applied to it by the payload
         f = [
-            -wrench_msg.wrench.force.x,
-            -wrench_msg.wrench.force.y,
-            -wrench_msg.wrench.force.z,
+            wrench_msg.wrench.force.x,
+            wrench_msg.wrench.force.y,
+            wrench_msg.wrench.force.z,
         ]
         n = [
-            -wrench_msg.wrench.torque.x,
-            -wrench_msg.wrench.torque.y,
-            -wrench_msg.wrench.torque.z,
+            wrench_msg.wrench.torque.x,
+            wrench_msg.wrench.torque.y,
+            wrench_msg.wrench.torque.z,
         ]
         frame["wrench"] = f + n  # [fx, fy, fz, nx, ny, nz]
 
@@ -197,9 +202,6 @@ class BatchIdentifierNode:
         fig.savefig(plot_path, dpi=150, bbox_inches="tight")
         rospy.loginfo(f"Saved wrench plot: {plot_path}")
 
-        plt.show(block=False)
-        plt.pause(0.5)
-
         return fig
 
     def get_range_input(self):
@@ -231,6 +233,25 @@ class BatchIdentifierNode:
             except ValueError:
                 print("Invalid input. Please enter numeric values.")
 
+    def zero_ft_sensor(self):
+        """Zero the F/T sensor before recording."""
+        service_name = "/ur_hardware_interface/zero_ftsensor"
+        try:
+            rospy.wait_for_service(service_name, timeout=2.0)
+            zero_ft = rospy.ServiceProxy(service_name, Trigger)
+            resp = zero_ft()
+            if resp.success:
+                print("F/T sensor zeroed successfully.")
+            else:
+                print(f"F/T sensor zero failed: {resp.message}")
+            return resp.success
+        except rospy.ROSException as e:
+            print(f"Service {service_name} not available: {e}")
+            return False
+        except rospy.ServiceException as e:
+            print(f"Service call failed: {e}")
+            return False
+
     def publish_inertia_params(self, params):
         """Publish inertia parameters as Float64MultiArray and set identified flag."""
         msg = Float64MultiArray()
@@ -248,9 +269,13 @@ class BatchIdentifierNode:
         print("--------------------")
 
         while not rospy.is_shutdown():
-            input("Press [Enter] to START recording...")
+            input("Press [Enter] to zero F/T sensor and START recording...")
             if rospy.is_shutdown():
                 break
+
+            # Zero F/T sensor before recording
+            self.zero_ft_sensor()
+            rospy.sleep(0.1)  # Brief pause after zeroing
 
             self.recorded_frames = []
             self.is_recording = True
@@ -384,7 +409,7 @@ class BatchIdentifierNode:
             print(f"{name:10s} {pi_ols[i]:>15.6f} {pi_tls[i]:>15.6f}")
         print("=" * 60)
         print(f"\nTopic to publish: /batch_identifier/inertia_params")
-        print("(Using TLS column-scaling result)")
+        print("(Using OLS result)")
         print("=" * 60)
 
         # Ask for confirmation
@@ -416,8 +441,8 @@ class BatchIdentifierNode:
                 # Also save old-style plots
                 self.plot_results(subset_frames, results_dir)
 
-                # Publish parameters
-                self.publish_inertia_params(pi_tls)
+                # Publish parameters (using OLS result)
+                self.publish_inertia_params(pi_ols)
                 return True
 
             elif response in ["n", "no"]:
