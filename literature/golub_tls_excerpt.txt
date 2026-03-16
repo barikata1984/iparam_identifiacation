@@ -1,0 +1,259 @@
+320                              Chapter 6. Modified Least Squares Problems and Methods
+
+M. Gulliksson and P-A. Wedin (2000). "Perturbation Theory for Generalized and Constrained Linear
+   Least Squares," Num. Lin. Alg. 7, 181·-195.
+M. Wei and A.R. De Pierro (2000). "Upper Perturbation Bounds of Weighted Projections, Weighted
+   and Constrained Least Squares Problems," SIA M J. Matrix Anal. Applic. 21, 931-951 .
+E.Y. Bobrovnikova and S.A. Vavasis (2001). "Accurate Solution o f Weighted Least Squares by Iterative
+   Methods SIA M. J. Matrix Anal. Applic. 22, 1 153-1174.
+M. Gulliksson, X-Q.Jin, and Y-M. Wei (2002). "Perturbation Bounds for Constrained and Weighted
+   Least Squares Problems," Lin. Alg. Applic. 34 9, 221-232.
+
+6.3      Total Least Squares
+The problem of minimizing II Ax - b I J 2 where A E R.m x n and b E R.m can be recast as
+follows:
+                                      min      I r 11 2              •
+                                                                                 (6.3. 1 )
+                                 b+r E ran( )        A
+I n this problem, there is a tacit assumption that the errors are confined t o the vector
+of observations b. If error is also present in the data matrix A, then it may be more
+natural to consider the problem
+                                        min              ll [ E l r ] I J F   ·
+                                                                                             (6.3.2)
+                                  b+r E ran( A +E)
+This problem, discussed by Golub and Van Loan (1980) , is referred to as the total least
+squares ( TLS ) problem. If a minimizing [ Eo I ro ] can be found for (6.3.2) , then any x
+satisfying (A + Eo )x = b + ro is called a TLS solution. However, it should be realized
+that (6.3.2) may fail to have a solution altogether. For example, if
+
+
+
+
+then for all € > 0, b E ran ( A + E15). However, there is no smallest value of I [ E , r J ll F
+for which b + r E ra n (A + E).
+     A generalization of (6.3.2) results if we allow multiple right-hand sides and use a
+weighted Frobenius norm. In particular, if B E R.m x k and the matrices
+                                     D diag ( d1 , . . . , dm ) ,
+                                        =
+
+
+                                     T = diag ( t 1 , . . . , tn + k )
+are nonsingular, then we are led to an optimization problem of the form
+                                     min             IJ D [ E I R ] T I J F                  (6.3.3)
+                               B+R E ran(A+ E )
+
+where E E R.m x n and R E R.m x k . If [ Eo I Ro ] solves (6.3.3) , then any X E :nr x k that
+satisfies
+                                 (A + E0 )X = (B + Ro )
+is said to be a TLS solution to (6.3.3) .
+       In this section we discuss some of the mathematical properties of the total least
+squares problem and show how it can be solved using the SVD. For a more detailed
+introduction, see Van Ruffel and Vanderwalle ( 1991) .
+6.3. Total Least Squares                                                                                              321
+
+6 .3 . 1   Mathematical Background
+The following theorem gives conditions for the uniqueness and existence of a TLS
+solution to the multiple-right-hand-side problem.
+                                                  k
+Theorem 6.3. 1 . Suppose A E IRm x n and B E IRm x and that D = diag ( d 1 , . . . , dm)
+and T = diag(t 1 , . . . , t n +k ) are nonsingular. Assume m ;::: n + k and let the SVD of
+                                    c = D[ A I B ]T = [ C1 I C2 l
+                                                                            n k
+be specified by UT CV        =   diag ( 0' 1 , . . . , O'n +k )   =   E where U, V, and E are partitioned as
+follows:
+
+    u = [ U1 I U2 ]                    V =                                             E =
+           n k
+                                              n k
+If O'n ( C1 ) > O'n +l ( C), then the matrix [ Eo I Ro ] defined by
+                                D [ Eo I Ro ]T = -U2 E 2 [ Yi� I V2� ]                                            (6.3.4)
+solves {6.3. 3). If T1   =   diag(ti , . . . , tn ) and T2            =   diag( t n +l • . . . , t n +k ) , then the matrix
+
+
+exists and is the unique TLS solution to (A + Eo)X = B + Ro .
+Proof. We first establish two results that follow from the assumption O'n (C1 ) > O'n +l (C).
+From the equation CV = UE we have
+
+
+We wish to show that V22 is nonsingular. Suppose V22 x = 0 for some unit 2-norm x.
+It follows from
+
+that 1 Vi 2 x l b = 1 . But then
+                   O'n + i (C) ;::: ll U2 E 2 x ll 2 = ll C1 Vi 2 x lb ;::: O'n (C1 ) ,
+a contradiction. Thus, the submatrix V22 is nonsingular. The second fact concerns the
+strict separation of O'n (C) and O'n +l (C). From Corollary 2.4.5, we have O'n (C) ;::: O'n (C1 )
+and so
+                                      O'n (C) ;::: O'n (C1 ) > O'n +i (C) .
+    We are now set to prove the theorem. If ran(B + R) C ran(A + E) , then there is
+an X ( n-by-k ) so (A + E)X = B + R, i.e.,
+
+                     { D[ A I B ]T + D [ E I R ]T } r - 1                     [ -�k ] =       o.                  (6.3.5)
+322                               Chapter 6. Modified Least Squares Problems and Methods
+
+Thus, the rank of the matrix in curly brackets is at most equal to n. By following the
+argument in the proof of Theorem 2.4.8, it can be shown that
+                                                        n+k
+                              ll D [ E I R ] T ll! 2:: L ai (C) 2 •
+                                                       i= n +I
+Moreover, the lower bound is realized by setting [ E I R ] = [ Eo I Ro ]. Using the
+inequality an ( C) > an + l ( C), we may infer that [ Eo I Ro ] is the unique minimizer.
+      To identify the TLS solution XT L 5 , we observe that the nullspace of
+
+
+
+is the range of     [ ��� ] Thus, from (6.3.5)
+                           .
+
+
+
+
+                                   r- 1   [ -� ] [ ��: ]
+                                                k
+                                                       =                   s
+
+for some k by k matrix S. From the equations r1-1 X = Vi 2 S and -T2- 1 = Vi 2 S we
+                -
+see that S = V22 1 r2- 1 and so
+            -   -
+
+
+
+
+           X = T1 Vi 2 S = -Ti Vi 2 V2; 1 r2- 1            = XTLs ·            D
+
+Note from the thin CS decomposition (Theorem 2. 5 2) that          .
+
+
+
+
+                           II x 11 2 = II v;12 v;22- 1 11 22 =
+                                                                 i - ak (Vi22 ) 2
+                                  T
+                                                       ak (Vi2 )
+where we define the "r-norm" on JRn x k by II z ll r = II rl-l ZT2 11 2 ·
+     If an (C1 ) = an + i (C), then the solution procedure implicit in the above proof is
+problematic. The TLS problem may have no solution or an infinite number of solutions.
+See §6 .3. 4 for suggestions as to how one might proceed.
+
+6.3.2      Solving the Single Right H a n d Side Case
+
+values of C satisfy an - p > an - p + I = · · · = an + l and let V = [ V 1 I · · · I Vn + i ] be a
+We show how to maximize ak (Vi 2 ) in the important k = 1 case. Suppose the singular
+
+column partitioning of V . If Q is a Householder matrix such that
+
+                          V(:, n + l - p:n + l)Q =               [ WO : ] n1 ' '"'
+                                                                       p
+then the last column of this matrix has the largest (n + l)st component of all the
+vectors in span{ vn + l-p , . . . , Vn + i } · If a = 0, then the TLS problem has no solution.
+Otherwise
+6 . 3. Total Least Squares                                                                                   323
+
+Moreover,
+                     [ I� i � l               UT (D[ A l b ]T)V
+                                                                        I� � = E
+                                                                       [ l         p
+
+
+and so
+                        D [ Eo l ro ] T = -D [ A l b ] T                 [:l           [ zT i a ] .
+Overall, we have the following algorithm:
+Algorithm 6 . 3 . 1 Given A E Rm x n (m > n) , b E Rm , nonsingular D = diag ( di . . . . , dm ) ,
+and nonsingular T = diag ( t 1 , , tn + i ) , the following algorithm computes ( if possible )
+                                      .   .   .
+
+
+
+a vector xTLs E Rn such that (A + Eo )xT Ls = ( b + ro) and II D[ Eo I ro ]T II F is minimal.
+     Compute the SVD uT(D[ A I b ]T)V = diag ( a1 , . ' Un + i ) and save v.
+     Determine p such that a1 ;::: · · · ;::: Un- p > Un-p + l = · · · = Un + l ·
+                                                                               .   .
+
+
+
+
+     Compute a Householder P such that if V = VP, then V(n + 1, n p + l:n) = 0.                       -
+
+
+
+
+     if Vn + l , n + l =f 0
+           for i = l :n
+                 Xi = -tiVi, n + i /( tn + i Vn + i , n + i )
+           end
+           XT L S = X
+     end
+This algorithm requires about 2mn 2 + 12n 3 fl.ops and most of these are associated with
+the SVD computation.
+
+6.3.3       A Geometric I nterpretation
+It can be shown that the TLS solution xT L s minimizes
+
+                                                                                                          (6.3.6)
+
+where af is the ith row of A and bi is the ith component of b. A geometrical interpre­
+tation of the TLS problem is made possible by this observation. Indeed,
+
+                                                  6i -     l af x - bi l 2
+                                                         XTT - 2 X + cn +2 l
+                                                    _
+
+
+
+                                                              1
+
+
+
+is the square of the distance from
+
+
+
+to the nearest point in the subspace
+324                               Chapter 6. Modified Least Squares Problems and Methods
+
+where the distance in Rn + l is measured by the norm II z II = II Tz 11 2 • The TLS problem
+is essentially the problem of orthogonal regression, a topic with a long history. See
+Pearson ( 1901 ) and Madansky (1959) .
+
+6.3.4      Variations of the Basic TLS P roblem
+We briefly mention some modified TLS problems that address situations when addi­
+tional constraints are imposed on the optimizing E and R and the associated TLS
+solution.
+      In the restricted TLS problem, we are given A E Rm x n , B E Rm x k , P1 E Rm x q ,
+and P2 E Rn + k x r , and solve
+                                      min                  I P[[ E I R ]P2 l l F        ·
+                                                                                                (6.3.7)
+                              B+R C ran ( A+E )
+
+We assume that q � m and r � n + k. An important application arises if some of the
+columns of A are error-free. For example, if the first s columns of A are error-free, then
+it makes sense to force the optimizing E to satisfy E(:, l :s) = 0. This goal is achieved
+by setting P1 = Im and P2 = Im + k ( : , s + l :n + k) in the restricted TLS problem.
+     If a particular TLS problem has no solution, then it is referred to as a nongeneric
+TLS problem. By adding a constraint it is possible to produce a meaningful solution.
+For example, let UT [ A I b J V = E be the SVD and let p be the largest index so
+V(n + 1 , p) ¥- 0. It can be shown that the problem
+                                               min                 l l ( E l r J ll F
+                                        ( A+E ) x=b+r                                           (6.3.8)
+                                  [ E I r ] V ( : , p+ l : n + l ) =O
+
+has a solution [ Eo I ro ] and the nongeneric TLS solution satisfies (A + Eo)x + b + ro .
+See Van Huffel ( 1992) .
+      In the regularized TLS problem additional constraints are imposed to ensure that
+the solution x is properly constrained/smoothed:
+                                              min            I [ E I r J ll F
+                                       ( A+E ) x=b+r                                            {6.3.9)
+                                          ll L x ll2 $<5
+
+The matrix L E Rn x n could be the identity or a discretized second-derivative operator.
+The regularized TLS problem leads to a Lagrange multiplier system of the form
+
+
+See Golub, Hansen, and O'Leary ( 1999) for more details. Another regularization ap­
+proach involves setting the small singular values of [A I b] to zero. This is the truncated
+TLS problem discussed in Fierro, Golub, Hansen, and O'Leary ( 1997) .
+Problems
+
+P6.3.1  Consider the TLS problem (6.3.2) with nonsingular D and T. (a) Show that if rank(A) < n,
+then (6.3.2) has a solution if and only if b E ran(A). (b) Show that if rank(A) = n, then (6.3.2) has no
+

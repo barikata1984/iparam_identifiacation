@@ -1,0 +1,674 @@
+2008 IEEE/RSJ International Conference on Intelligent Robots and Systems
+Acropolis Convention Center
+Nice, France, Sept, 22-26, 2008
+
+
+
+         On-Line Estimation of Inertial Parameters Using a Recursive Total
+                             Least-Squares Approach
+                                     Daniel Kubus, Torsten Kröger, and Friedrich M. Wahl
+
+
+   Abstract— The estimation of the ten inertial parameters of              following requirements: the estimates have to be provided
+rigid loads, which are attached to manipulators, may ben-                  on-line; offsets affecting the force-torque sensor values have
+efit several robotics applications, e.g.: force control, object            to be compensated; sensor noise and disturbances have to
+recognition, and pose estimation. These applications require
+sufficiently accurate, robust, and fast estimation of the inertial         be considered appropriately; workspace limitations have
+parameters. Existing approaches, however, do not allow for                 to be incorporated in estimation trajectory design. Since
+robust on-line estimation, since they use standard batch least-            execution times and down-times are crucial in industrial
+squares techniques, which ignore noise in the data matrix. The             assembly and handling, the estimation process should be
+proposed approach, however, estimates the inertial parameters              as short as possible while maintaining sufficient quality
+on-line and very fast (approx. 1.5s), while explicitly considering
+noise in the data matrix by a total least-squares approach.                of the estimates. Common force-torque sensors use strain
+Apart from estimation equations and estimation approaches,                 gauges and hence exhibit noise, offsets, and drift effects
+the design of estimation trajectories is addressed in this paper.          that have to be counteracted. Apart from the measured
+The performance of the proposed estimation approach is com-                forces and torques, the accelerations and angular velocities
+pared with the recursive ordinary least-squares (RLS) and the              contained in the data matrix are subjected to considerable
+recursive instrumental variables (RIV) method. Experimental
+results clearly recommend the proposed recursive total least-              disturbance effects and noise, but the popular ordinary
+squares approach (RTLS).                                                   least-squares (LS) method ignores errors in the data matrix.
+                                                                           The herein-proposed recursive total least-squares approach,
+                        I. I NTRODUCTION                                   however, overcomes this flaw. Moreover, in many industrial
+   Various challenging handling, assembly, and service                     environments, the workspace of the manipulator is limited.
+robotics applications may benefit from the estimation of                   Therefore, estimation trajectories have to be adaptable to
+the inertial parameters (the mass, the coordinates of the                  the current environment.
+center of mass, and the elements of the inertia matrix) of a
+manipulator load, i.e., a tool or a gripped object. Regarding              The off-line estimation of inertial parameters of rigid loads
+force-guided and force-guarded motions, estimates of the                   attached to industrial manipulators using a wrist-mounted
+inertial parameters of the load facilitate the elimination of              force-torque sensor was addressed early by An et al. [5].
+all non-contact forces and torques caused by the inertia                   Their approach employed ordinary least-squares estimation
+of the load, thus enabling highly-dynamic force-guided or                  and manually-designed estimation trajectories. Kozlowski
+force-guarded motions [1]–[3].                                             [6] extended this approach by employing trajectories that
+Common object recognition approaches most often rely on                    were optimized w.r.t. parameter excitation. Niebergall [7]
+visual information. However, inertial parameters may also                  developed a robot, which was solely dedicated to the
+serve as recognition features. Moreover, inertial parameters               off-line estimation of inertial parameters. Recently, Winkler
+can be used to estimate gripping poses of manipulated                      [8] proposed an approach to off-line estimation using a 6D
+objects [4].                                                               force-torque and 6D acceleration sensor. These approaches
+Since suitable CAD data is rarely provided for complex                     did neither consider time-efficient on-line estimation nor
+tools or gripped objects in robotics applications, the inertial            did they incorporate sensor offset handling. The on-line
+parameters of the load have to be estimated experimentally.                estimation approach in [4] and [3] employed a recursive
+To estimate these parameters using a wrist-mounted force-                  instrumental variables method – effectively combining
+torque sensor, the load is attached to the manipulator and                 acceleration signals from different sources – and considered
+moved on an estimation trajectory. During the motion                       sensor offsets. Nevertheless, all these approaches have the
+(on-line) or afterwards (off-line), the forces and torques                 same shortcoming: the employed estimation approach is
+acting upon the sensor as well as accelerations and angular                based on least-squares (LS) techniques, thus ignoring errors
+velocities of the load are fused to obtain estimates of the                in the data matrix, i.e., noise and disturbance affecting
+inertial parameters.                                                       acceleration and angular velocity signals. However, our
+                                                                           experimental results suggest not to neglect these errors,
+Aiming particularly at applications in industrial                          regardless of the source of the signals employed in the data
+environments, the estimation approach should fulfill the                   matrix.
+                                                                              The approach proposed herein takes into account sensor
+   The authors are with the Department for Robotics and Process Con-
+trol, Technische Universität Braunschweig, 38106 Braunschweig, Germany.   offsets and enables the on-line estimation of the inertial
+{d.kubus, t.kroeger, f.wahl}@tu-bs.de                                      parameters. Furthermore, it explicitly considers errors
+
+978-1-4244-2058-2/08/$25.00 ©2008 IEEE.                               3845
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+in the data matrix by applying a recursive total least-
+squares technique. The estimation may be performed using                                                            o
+acceleration sensor data or deriving acceleration signals                                                                            z
+                                                                                                                    z       C
+from joint setpoints or actual joint angles with a simple
+Kalman filter. To show the performance of the proposed                                                          S
+                                                                                                                c       x
+approach, it is compared to the recursive ordinary least-                                   S
+squares technique (RLS) and the recursive instrumental
+variables (RIV) method.                                                            x                                            y
+
+The rest of this paper is structured as follows: Section II                                         y
+briefly reviews the equations used for parameter estimation
+and addresses the problem of incorporating force-torque                    Fig. 1. Force-torque sensor with attached load; utilized coordinate systems.
+sensor offsets into the estimation approach. Section III
+summarizes the pursued trajectory design approach and                      S
+notes an important pitfall of this popular approach. Section                a, Sα, Sω, and Sg to the complete set of inertial parameters
+IV addresses estimation techniques. The popular recursive                  contained in Sϕ, cf. Eq. (5).
+least-squares approach as well as the recursive instrumental
+                                                                                        S 
+                                                                                           f
+variables method are reviewed and our recursive total least-                              S      = SA(Sa, Sα, Sω, Sg) Sϕ             (4)
+                                                                                           τ
+squares approach is introduced. In Section V, the mentioned
+estimation approaches are compared experimentally and                                  S
+                                                                                        ϕ       =       m, mScx , mScy , mScz ,                    (5)
+their performances are evaluated. Moreover, the influence                                                                                   T
+                                                                                                        S   S       S       S   S   S
+of different acceleration signals on the estimation result is                                           Ixx , Ixy , Ixz , Iyy , Iyz , Izz
+addressed. Section VI concludes the paper.                                                      S
+                                                                           The data matrix A is given in Eq. (6) on the following page.
+                  II. E STIMATION E QUATIONS                               Note that index S is omitted for brevity. The matrix SA, as
+                                                                           defined above, does not consider an important characteristic
+  To estimate the inertial parameters of a load attached to a              of common strain gauge force-torque sensors. The forces
+manipulator, equations relating the dynamic state of the load              and torques measured by these sensors typically show time-
+and its inertial parameters (the mass m, the coordinates of                varying offsets that would deteriorate the estimation results.
+the center of mass c, and the elements of the inertia matrix               In order to handle these offsets, two approaches may be
+I) to the forces Sf and torques Sτ acting upon the load                    pursued: the sensor values may be zeroed in a known sensor
+have to be derived from the basic laws of dynamics. Based                  orientation considering eliminated gravitational forces and
+on the Newton-Euler approach, the motion of a rigid body                   associated torques by a pseudo gravity vector Sginit =
+due to external forces and torques is described by two vector              [Sginitx ,S ginity ,S ginitz ]T ; the offsets may be estimated di-
+equations [4], [6].                                                        rectly. While the first approach requires zeroing each time
+ S
+                                                                         a new object is gripped, the second approach does not
+  f = m Sa − m Sg + Sα × m Sc + Sω × Sω × m Sc (1)
+                                                                           entail any zeroing, but the number of estimated parameters
+ S
+  τ = SI Sα + Sω × (SI Sω) + m Sc × Sa − m Sc × Sg (2)                     increases from 10 to 16. The first approach leads to the
+                                                                           matrix SAginit which is composed of a matrix SÃginit and a
+where                                                                    6 × 6 zero matrix. SÃginit considers the gravitational forces
+                          Ixx       Ixy    Ixz                             and associated torques that are eliminated by zeroing the
+                    I =  Ixy       Iyy    Iyz                     (3)    sensor values.
+                          Ixz       Iyz    Izz                                             S                                               
+                                                                                                ginitx 0              0          0
+To clarify the utilized coordinate systems and parameters,                                 Sginity 0                 0          0          
+                                                                                           S                                               
+Fig. 1 depicts the force-torque sensor with a load (object)                 S
+                                                                                               g initz   0           0          0          
+                                                                             Ãginit =                              S            S
+                                                                                                                                            
+O rigidly attached to it. The measured forces Sf , torques                                    0          0             ginitz
+                                                                                                                                 −  g init
+                                                                                                                                            
+                                                                                                                                          y 
+S
+ τ , the linear and angular acceleration vector Sa and Sα,                                 0             −Sginitz 0             S
+                                                                                                                                  ginitx 
+                                                                                                          S
+the angular velocity vector Sω, the gravity vector Sg, the                                     0            ginity    −Sginitx 0
+coordinates of the center of mass Sc, and the inertia matrix                                                                               (7)
+                                                                                                S
+S
+ I refer to the sensor frame S. If one of the mentioned                                          Aginit = SÃginit 06×6                     (8)
+parameters is not measured w.r.t. the frame S, it can be
+transformed to this frame [9]. Note that the axes of the frame             The resulting matrix SAof f s used for parameter estimation
+C, which is located at the center of mass (COM) of the                     is the sum of Eq. (6) and Eq. (8).
+object, are parallel to the axes of S.                                                              S
+                                                                                                    Aof f s = SA + SAginit                         (9)
+   The vector equations 1 and 2 are converted to Eq. (4)
+[6], which is used for parameter estimation. This equation                 Apart from sensor offsets, drift effects are an issue with
+relates the measured forces/torques Sf , Sτ and the variables              common force-torque sensors. Since the estimation duration
+
+                                                                      3846
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+                              −ωy2 − ωz2                  ωx ωz + αy       0            0                                 0             0                  0                        0
+           a −g                            ωx ωy − αz
+                                                                                                                                                                                          
+                 x        x
+
+      ay − gy                ωx ωy + αz    −ωx2 − ωz2    ωy ωz − αx       0            0                                 0             0                  0                        0
+                                                          −ωy2 − ωx2
+                                                                                                                                                                                          
+      a −g                   ωx ωz − αy    ωy ωz + αx                     0            0                                 0             0                  0                        0
+  S
+   A= z0 z
+                                                                                                                                                                                          
+                                  0         az − gz       gy − ay        αx       αy − ωx ωz                        αz + ωx ωy       −ωy ωz           ωy2 − ωz2                  ωy ωz   
+                                                                                                                                                                                          
+                     0         gz − az           0         ax − gx       ωx ωz     αx + ωy ωz                         ωz2 − ωx2        αy             αz − ωx ωy                 −ωx ωz
+                     0         ay − gy       gx − ax           0        −ωx ωy      ωx2 − ωy2                        αx − ωy ωz       ωx ωy           αy + ωx ωz                   αz
+                                                                                                                                                                                             (6)
+
+                                                                                                              120
+is rather short (1.5s), drift effects can be neglected (at least                                                                        Active part
+                                                                                                              100                                      q5
+for the employed force-torque sensor [10]).
+                                                                                                               80
+                                                                                                                                                          q
+                 III. E STIMATION T RAJECTORIES                                                                                                           4
+
+
+
+
+                                                                                    Joint angles in degrees
+                                                                                                               60
+                                                                                                                                                                  q
+   A popular approach to the design of excitation trajectories                                                 40                                                 3
+
+for parameter estimation is based on sinusoidal trajectories                                                   20
+in joint space. A fixed number of N weighted sine and
+                                                                                                                0                                             q
+cosine functions respectively are superposed to compose the                                                                   q
+                                                                                                                                                              2
+                                                                                                                               1                                  q
+                                                                                                                                                                      1
+trajectory of a joint [11], [12]. Following this approach, the                                                −20             q2
+                                                                                                                              q3
+trajectory qi (t) of joint i is given by:                                                                     −40
+                                                                                                                              q4
+                                                                                                                              q
+                 N                                                                                            −60              5
+                                                                                                                              q                                   q
+                                                                                                                                  6
+                                                                                                                                                                     6
+      si (t) =           ρi,k sin (2πkf t) + δi,k cos (2πkf t)         (10)                                   −80
+                                                                                                                 0     1000           2000            3000                4000        5000
+                 k=1                                                                                                                         Time in ms
+                                           qi (t) = si (t) + qi,0      (11)
+                                                                              Fig. 2. Joint angles of an optimized trajectory. The highest frequency is
+where si (t) denotes the sinusoidal part. The parameter qi,0                  limited to 2Hz to reduce excitation of the mechanical structure.
+denotes a constant offset angle; ρi,k and δi,k are the coeffi-
+cients of the sine and the cosine part respectively. The base
+frequency f of the joint trajectories is identical to ensure                  [16] yielding trajectory qi∗ (t). t1 and t2 denote the begin
+periodicity. Note that trajectories according to Eq. (11) are                 and the end of the active part respectively.
+jerk-limited (since the derivative of a sinusoidal function is                             ∗
+                                                                                           qi (t) = f (t)si (t) + qi,0 f or t0 < t < t1
+sinusoidal again) and hence reduce undesired excitation of
+                                                                                qi∗ (t) =   q ∗ (t) = qi (t)            f or t1 < t < t2
+the mechanical structure of the manipulator. The weights                                   i∗
+                                                                                            qi (t) = g(t)si (t) + qi,0 f or t2 < t < t3
+ρi,k and δi,k may be optimized w.r.t. a suitable criterion that                                                                        (14)
+evaluates the influence of the selected trajectory on the noise               For instance, following constraints are applied to the initial
+and bias sensitivity of the estimates.                                        part from t0 to t1 :
+   Regarding this influence, the correlation matrix Υ con-
+sisting of M SA matrices compiled at subsequent instants                         f (t0 )si (t0 ) = 0                                           d
+                                                                                                                                               dt
+                                                                                                                                                  (f (t0 )si (t0 )) = 0
+                                                                                 d2
+of time plays a key role.                                                        dt
+                                                                                     (f (t0 )si (t0 )) = 0                                    f (t1 )si (t1 ) = si (t1 )
+                                                                                  d                      d                                    d2                         2
+
+                                  S                                              dt
+                                                                                    (f (t1 )si (t1 )) = dt (si (t1 ))                         dt
+                                                                                                                                                  (f (t1 )si (t1 )) = ddt (si (t1 ))
+                         Υ    =    AT S
+                                    Ξ AΞ                               (12)                                                                                                     (15)
+                 S                 S                      T                   These constraints guarantee zero acceleration at t0 as
+                     AΞ       =       AT S T     S T
+                                       1 A2 . . . AM                   (13)
+                                                                              well as steady acceleration at the transition to the active
+The sensitivity of Sϕ to errors in SAΞ can be shown to                        part at t1 and hence a bounded jerk profile. Due to the
+increase with increasing condition number κ(Υ) if the noise                   structure of q ∗ (t), these constraints can easily be converted
+affecting SAΞ and the force-torque measurements remain                        into corresponding constraints on f (t) that allow for the
+unchanged [13], [14]. To minimize the condition number                        calculation of its coefficients. Similarly, the coefficients of
+of Υ, following steps are performed: first, a Monte Carlo                     g(t) are obtained. Thus, jerk limitation is achieved during
+search is carried out to find promising candidate trajectories                the entire estimation trajectory.
+for optimization; then, the fmincon function provided by
+the Matlab Optimization Toolbox [15] is applied to each of                    The condition number of a trajectory is commonly calculated
+the candidate trajectories to minimize their κ(Υ). At each                    employing joint accelerations and velocities based on joint
+optimization iteration, the compliance to environmental and                   angle setpoints [11], which are not subjected to noise
+dynamical constraints is checked [4]. In Fig. 2, the joint                    or disturbances. However, due to material oscillations,
+angles of a resulting trajectory are plotted over time.                       backlash, and controller imperfections, the actual trajectory
+To provide jerk limitation also in the beginning and the end                  of the end-effector deviates from the desired trajectory
+of the trajectory, the sinusoidal parts preceding and suc-                    and hence the measured acceleration and angular velocity
+ceeding the active part of the trajectory are multiplied with                 values as well. Thus, a trajectory with a low condition
+suitable 6th order polynomials f (t) and g(t) respectively                    number based on joint angle setpoints may exhibit a
+
+                                                                          3847
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+higher condition number if joint angle measurements are                                            80
+used for computation. Moreover, the same trajectory may                                            60
+
+exhibit different condition numbers with slightly different                                        40
+                                                                                                   20
+setups. Table I presents condition numbers of two resulting
+
+
+
+
+                                                                                     2
+                                                                                     α in rad/s
+                                                                                                    0
+trajectories tr1 and tr2 based on joint angle setpoints and                                       −20
+acceleration sensor data respectively. The condition numbers                                      −40
+based on sensor data are clearly higher than those based                                          −60
+                                                                                                                                  α
+                                                                                                                                  sens
+                                                                                                                                  α
+on joint angle setpoints and additionally the trajectory with                                     −80                             set
+
+                                                                                                    0   500                1000          1500
+lower κset exhibits higher κsens . Therefore, the decision                                                    Time in ms
+
+on an estimation trajectory should be based on condition
+                                                                           Fig. 3. Angular acceleration derived from joint angle setpoints αset and
+numbers that have been obtained experimentally rather                      measured angular acceleration αsens . The differences are striking.
+than those obtained from joint angle setpoints. Compared
+with the dependency of the condition number on the signal
+source, the dependency on the load, o1 or o2 respectively                  least-squares methods are appropriate for this estimation
+(cf. Fig. 5), may be neglected.                                            problem, since their error-model assumes error-free data
+                               TABLE I                                     matrices.
+  Condition numbers based on joint setpoints κset and sensor data
+ κsens . As can be seen, the differences between κset and κsens are        B. Recursive Least-Squares Method
+ considerable, whereas the dependency of κ on the employed load is            This Subsection briefly reviews the recursive least-squares
+                             negligible.                                   (RLS) method and its error model. The RLS method is based
+                                                                           on the assumption that the data matrix SA is free of errors;
+                  Trajectory   Load    κset    κsens
+                  tr1          o1      7.72    23.23                       errors are merely modelled as an additive vector e. Thus, the
+                  tr1          o2      7.72    23.42                       error model of the RLS method is described by the following
+                  tr2          o1      8.18    16.89                       equation:
+                  tr2          o2      8.18    14.44                                          S 
+                                                                                                 f
+                                                                                               S        + e = SAΞ Sϕ                 (16)
+                                                                                                 τ Ξ
+                IV. E STIMATION A PPROACHES
+                                                                           Ξ denotes a stack of matrices, as in Eq. (13), or a stack
+   This Section first presents considerations concerning the               of vectors respectively. This error model does not consider
+signals employed to compose the data matrix. Then, the                     errors in the data matrix SA(Sa, Sα, Sω, Sg). Regarding
+popular recursive least-squares method and the recursive                   the parameter estimation problem at hand, however, ig-
+instrumental variables method are briefly reviewed. Finally,               noring errors in the data matrix means neglecting noise
+our recursive total least-squares method is introduced.                    and disturbances in accelerations, angular velocities, and
+A. The Data Matrix and its Signal Sources                                  the gravity vector. Particularly acceleration signals may be
+                                                                           heavily affected by noise and disturbances while force-torque
+   The linear and angular accelerations as well as the angular
+                                                                           signals may show clearly less noise [10]. Thus, the LS error
+velocities contained in the data matrix SA may be measured
+                                                                           model may be regarded as inadequate for the estimation of
+by dedicated sensors, derived from actual joint angle values
+                                                                           inertial parameters.
+[4] or from joint angle setpoints [6]. Depending on the
+employed controller, joint angle setpoints may significantly                  The recursive least-squares algorithm is given by the
+deviate from the actual values. Regarding common manipu-                   following equations [17]:
+lators, material oscillations, backlash, etc. additionally lead                                                                          −1
+                                                                                    Kk = Σk−1 SAT
+                                                                                                k
+                                                                                                   S
+                                                                                                    Ak Σk−1 SAT k +Λ                            (17)
+to significant deviations between acceleration and velocity                                                   S
+values based on the joint angle setpoints and the actual                                        Σk = 1 − Kk Ak Σk−1                             (18)
+                                                                                                  S               
+values. As mentioned above, acceleration sensor data, which                    S     S                fk     S    S
+                                                                                ϕ̂k = ϕ̂k−1 + Kk     S    − Ak ϕ̂k−1                            (19)
+may exhibit unfavorable noise and disturbance characteristics                                         τk
+[10], may be used for parameter estimation as well. To
+demonstrate the differences between these signals, Fig. 3                  Kk denotes the gain matrix at time-step k; Σk is the
+shows an angular acceleration signal derived from the joint                parameter covariance matrix; 1 denotes an identity matrix of
+angle setpoints that are fed into the controller and an angular            appropriate size. The estimated parameter vector is denoted
+acceleration signal measured by our JR3 acceleration sensor.               by Sϕ̂k . The matrix Λ contains the measurement noise
+Neither the measured acceleration signals, which are affected              covariances.
+by noise and other disturbances, nor the signals derived from
+                                                                           C. Recursive Instrumental Variables Method
+joint angle setpoints, which are not influenced by material
+oscillations, backlash and other effects, are identical with                 The equations of the recursive instrumental variables
+the actual accelerations. Incorporating these signals in data              method do not deviate remarkably from those of the RLS
+matrices inevitably raises the question, whether ordinary                  method, but in contrast to the RLS method, the RIV method
+
+                                                                      3848
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+can yield unbiased estimates in the presence of correlated                 approach regarding a two-dimensional line-fitting problem.
+noise.                                                                     In Fig. 4a), the error measure employed by the ordinary
+                                                          −1
+         Kk = Σk−1 SCkT         S
+                                 Bk Σk−1 SCkT + Λ                 (20)
+                      Σk = 1 − Kk SBk Σk−1                        (21)
+                        S                  
+    S                      fk
+     ϕ̂k = Sϕ̂k−1 + Kk    S    − S
+                                  B k
+                                      S
+                                       ϕ̂ k−1                     (22)
+                           τk
+The variables in eqs. 20 – 22 are similar to those in
+eqs. 17 – 19 except for the matrices SCk and SBk . Both
+S
+ Bk and SCk correspond to SAk but the signal sources
+of their elements may be different. The data matrix SBk
+contains data variables Sωd , Sαd , Sad and Sgd , whereas
+the instrumental variables matrix Ck contains instrumental
+variables denoted by Sωinst , Sαinst , Sainst and Sginst [3].
+If the instrumental variables are selected appropriately, i.e.,
+basically showing a high correlation with the data variables               Fig. 4. Line fitting with LS and TLS. In contrast to the LS approach,
+but a low correlation with the noise, the RIV method can                   the TLS approach considers errors in the x-direction as well.
+yield unbiased estimates in the presence of correlated noise
+                                                                           least-squares approach is depicted; Fig. 4b) shows the
+[17]. However, the RIV method ignores errors in the data
+                                                                           error measure of the total least-squares approach. The LS
+matrix as well.
+                                                                           approach assumes the variables on the x-axis to be free of
+D. Total Least-Squares Approach                                            errors and hence measures the fitting error as the sum of
+   The fundamental drawback of ordinary least-squares                      the squared vertical distances between the data points and
+methods in inertial parameters estimation is their error                   the estimated line. In contrast, the TLS approach considers
+model as stated above. Both LS and RLS assume the                          the sum of the squared orthogonal distances between the
+data matrix SA to be free of errors and constrain errors                   data points and the line thus incorporating errors in both
+to the force-torque vector, although this assumption is                    dimensions in the error measure. Regarding the estimation
+clearly not valid here, since all variables contained in                   problem at hand, employing the orthogonal distances in the
+the data matrix are subjected to noise and disturbances.                   error measure means considering noise and disturbance in
+Especially the acceleration signals a and α prove to be                    forces-torques as well as accelerations and angular velocities.
+affected by considerable noise and disturbances [10]. One
+may presume that these errors may be neglected compared                    The basic steps of the proposed recursive total least-
+with those of the force-torque values. Experimental results                squares approach may be summarized as follows:
+presented in Section V show that this supposition does                        1) Calculate an initial SVD with a standard SVD algo-
+not hold (regarding our setup). Therefore, an approach                            rithm using a small number of data matrices (here: 2
+explicitly considering errors in all involved variables, i.e.,                    – 3).
+accelerations, angular velocities, and forces-torques will                    2) Compile a new input matrix consisting of the current
+achieve better performance than traditional LS methods.                           data matrix SA and force-torque vector [Sf , Sτ ]T and
+The total least-squares method (TLS) explicitly considers                         perform an SVD update incorporating the new data.
+errors in both the force-torque vector and the data matrix,                   3) Update estimate: If the deviation between the smallest
+but its application to on-line parameter estimation seems                         singular values is less than ε, transform left singular
+cumbersome due to the required update of the singular                             vectors; compute TLS solution from the left singular
+value decomposition (SVD) at each estimation cycle. An                            vectors.
+efficient incremental SVD [18], however, enables the on-line                  4) Continue with 2 or stop estimation.
+application of the total least-squares technique.                          The crucial issue regarding on-line estimation using TLS
+                                                                           approaches are the high costs of the SVD or SVD updates
+In contrast to RLS and RIV, the recursive total least-                     respectively. Over the last decades, several algorithms for
+squares method is based on the more appropriate error                      efficiently updating the SVD or approximations have been
+model         S                                                          proposed, e.g.: the so-called ULV decomposition may be
+                f                                                          used to yield an approximate TLS solution [19], [20]; Gu
+               S     + e = (SAΞ + E)Sϕ           (23)
+                τ Ξ                                                        and Eisenstat [21] proposed a stable and very efficient SVD
+that considers errors E in the data matrix and errors e                    update algorithm. The update algorithm proposed by Brand
+in the force-torque vector. Thus, noise and disturbance                    [18], however, provides an exact and stable update of the
+are not only considered in the force-torque signals (cf.                   SVD with maintainable computational costs, especially if
+Eq. 16) but also in the acceleration and angular velocity                  an update of the right singular vectors is not required and
+signals. Fig. 4 illustrates the difference between the least-              the number of rows is small. Furthermore, it permits adding
+squares (LS) approach and the total least-squares (TLS)                    an arbitrary number of columns in one update-step, e.g.,
+
+                                                                      3849
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+an entire data matrix including current force-torque vector.               the middle matrix Zk is performed, the volume v of Nk
+Compared to the computational costs of the SVD update,                     orthogonal to Uk is calculated.
+those of the remaining steps to obtain the TLS estimate – a                                        
+potential Householder transform and the final computation                                     v = det(GT   k Gk )             (31)
+of the estimates – are negligible.
+                                                                           If this volume is very small, i.e., v < ε with ε in the range of
+                                                                           machine precision, Zk is reduced to Zk = [Sk Lk ] and the
+The proposed recursive total least-squares algorithm
+                                                                           updated left singular vectors in matrix Uk+1 and singular
+combines the well-known TLS algorithm [22] with an
+                                                                           value matrix Sk+1 are given by
+efficient incremental SVD update [18]. To decrease the
+computational complexity of the approach, the right singular                                              ′
+                                                                                               Uk+1 = Uk Uk;1:r,1:r                           (32)
+vectors are not updated since they are not necessary for                                                  ′
+                                                                                                 Sk+1 = Sk;1:r,1:r                            (33)
+computing the TLS solution.
+                                                                                   ′
+                                                     where r denotes the rank and Uk;1:r,1:r
+   In the first step, an initial SVD of at least j = 2 data                                  denotes a submatrix
+                                                     of U ′ at time-step k containing its first r rows and r
+matrices and force-torque vectors respectively is computed.
+"» »   „ S   «– –T          » »   „ S   «– –T #      columns. Otherwise, the SVD update procedure is performed
+     S    f1                   S     fj              according to
+  D A1         TS  , . . . , D Aj         T     (24)S
+                 τ1                                     τj
+                                                   SVD
+                                                                                                Uk+1 = [Uk Jk ] Uk′                           (34)
+                                          = Mj = Uj Sj VjT                                                Sk+1 = Sk′                          (35)
+          SVD
+Let Mk = Uk Sk VkT denote the SVD of the initial data or                   Note that both an explicit calculation of Vk′ and an update
+the SVD of the last step respectively. The incremental SVD                 of V are not necessary since V is not involved in the TLS
+update exploits the relation:                                              solution. To prevent U from loosing othogonality, Brand
+                              »              –»              –T            [18] proposed a re-orthogonalization method. However, re-
+              SVD                 Sk   Lk         Vk     0                 garding the conducted experiments, re-orthogonalization has
+      [Mk Nk ] = [Uk Jk ]
+                                  0    Gk         0      1
+                                                                  (25)
+                                                                          proven unnecessary. After the update of the SVD, the
+                                                  SVD
+                                    T
+                      = Uk+1 Sk+1 Vk+1            = Mk+1                   matrix Sk+1 = diag(sk+1;1 , . . . , sk+1;n+1 ) is regarded.
+                                                                           If the smallest singular value sk+1;n+1 is not unique, i.e.
+where                                                                      sk+1;n+1−p = sk+1;n+1−(p−1) = . . . = sk+1;n+1 (using
+  • 1 denotes the identity matrix                                          an ε environment), Uk+1 is transformed with a House-
+  • Nk denotes the transpose of the                                        holder transform H [22], i.e., Wk+1 = Uk+1 H, so that
+                                   new data
+                                           S
+                                               matrix  and
+                                                                           Wk+1;n+1,n−p+1...n = 0 (p elements of the last row);
+                                               
+                                   S        fk
+    current forces-torque vector     Ak S           multi-                 otherwise Wk+1 = Uk+1 . Please consult [22] for numerical
+                                            τk
+    plied with the diagonal weighting matrices D and T .                   and implementation issues. The last step merely consists of
+                               S  T                                  the calculation of the inertial parameter estimates based on
+                                    f                                      Wk+1 :
+               Nk = D SAk S k             T           (26)
+                                    τk                                                                 −ti,i wk+1;i,n+1
+                                                                                         ϕ̂k+1;i =                                 (36)
+                                                                                                   tn+1,n+1 wk+1;n+1,n+1
+   •   Lk is the projection of Nk onto the orthogonal basis
+       formed by the left singular vectors.                                where ti,i denotes an element of the weighting matrix T .
+                                                                           Note that a solution exists only if wk+1;n+1,n+1 = 0.
+                              Lk = UkT Nk                         (27)
+                                                                                             V. E XPERIMENTAL R ESULTS
+   •   Gk is the projection of Nk on the subspace orthogonal
+                                                                           A. Description of the Experimental Setup
+       to Uk obtained by QR decomposition.
+                                                                              The presented experiments have been conducted with
+                                  QR
+                        Jk Gk = Nk − Uk Lk                        (28)     a Stäubli RX60 industrial manipulator equipped with a
+                                                                           wrist-mounted JR3 force-torque and acceleration sensor
+In order to update the SVD, the middle matrix Zk in Eq. (25)               (85M35A3-I40-D 200N12). Instead of the standard Stäubli
+has to be diagonalized.                                                    controller, we use an open control architecture, as presented
+                                                                         in [24]. The parameter estimation has been performed with a
+                             Sk Lk
+                     Zk =                               (29)               frequency of 1000Hz and the estimation duration has been
+                             0    Gk
+                                                                           limited to 1.5s.
+Let                                                                        Fig. 5 depicts three rigid test-loads of masses ranging from
+                                       SVD                                 1kg to 1.6kg, whose inertial parameters have been estimated
+                        Uk′ Sk′ Vk′T = Zk                         (30)
+                                                                           in the experiments. The test-loads have shapes that simplify
+denote the SVD of the middle matrix. The SVD of this                       theoretical calculation of their inertial parameters to establish
+comparatively small matrix may be calculated using a stan-                 ground truth data. For instance, the theoretically determined
+dard SVD approach, e.g. [23]. Before the diagonalization of                parameter vector of o1 is:
+
+                                                                      3850
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+                                                                           the convergence of the estimates, minor differences can be
+                                                                           observed.
+
+
+
+
+Fig. 5. Employed test-loads made of steel. o2 consists of two identical
+blocks that may be stacked or used separately.
+
+
+
+
+   ϕ̂th    = [1.00kg, −43.5kgmm, 28.5kgmm, 22.5kgmm,
+           2.21 · 10−3 kgm2 , 1.22 · 10−3 kgm2 , 0.96 · 10−3 kgm2 ,        Fig. 6. Relative errors of the different estimation techniques using
+                                                                      ˜T   object o1 and trajectory tr2 . Acceleration measurements are provided
+           3.74 · 10−3 kgm2 , −0.63 · 10−3 kgm2 , 4.95 · 10−3 kgm2
+                                                                           by a JR3 acceleration sensor. The total least-squares approach shows
+                                                                           the best overall performance.
+
+  As a performance measure, the relative estimation error
+erel (x̂) has been used.
+                                         
+                                x̂ − xth 
+                  erel (x̂) =            · 100%   (37)
+                                    xth 
+Since the distal part of the force-torque sensor which is
+attached to the load is not massless, it contributes to the
+estimated load mass. This effect has been eliminated by
+estimating the inertial parameters of the distal sensor part
+according to [4] and subtracting them from the estimation
+result.
+
+B. Performance Results of Estimation Approaches
+   Regarding the performance of the different estimation
+approaches, significant differences can be observed. Fig. 6
+exemplifies the relative estimation errors of the estimation               Fig. 7. Relative errors of the different estimation techniques using
+approaches. The acceleration signals have been provided by                 object o1 and trajectory tr2 . Linear acceleration signals are provided
+                                                                           by the JR3 acceleration sensor but angular accelerations are derived
+a JR3 acceleration sensor. The angular velocity signals have               from the joint angle measurements according to [4]. The total least-
+been obtained by the Kalman filtering approach described                   squares approach again shows the best overall performance.
+in [4]. Unless otherwise noted, accelerations and angular
+velocities based on joint angle setpoints serve as instrumental               Fig. 8 exemplarily depicts the evolution of the RTLS and
+variables for the RIV method. The RLS approach shows sig-                  RIV estimates of mcz over time using o2 and tr2 . The RTLS
+nificant errors especially affecting the elements of the inertia           estimate approaches the true value not as quickly as the
+matrix. Employing the RIV method significantly decreases                   RLS estimate in the beginning, which is also observed for
+the estimation error. However, even better estimation results              other parameters, loads, and trajectories. Nevertheless, the
+have been achieved by the RTLS approach. As can be seen,                   convergence behaviors of the estimation approaches justify
+the RTLS estimates outperform the RIV estimates in all but                 the limitation of the estimation duration to 1.5s.
+one parameters.
+If the angular acceleration signals are derived from the joint             C. Performance Results for Different Signals
+angle measurements as described in [4] instead of measuring                  Fig. 9 presents relative estimation errors achieved with
+them directly, the estimation error is reduced considerably.               the RTLS approach using different acceleration signals. KF
+Fig. 7 shows the corresponding relative estimation errors of               denotes acceleration signals derived from encoder measure-
+the different estimation approaches. In this case, the RTLS                ments using the Kalman filtering approach mentioned above.
+approach outperforms RIV and RLS even more clearly than                    Mixed denotes a combination of the linear accelerations
+in the previous diagram. The superior performance of the                   provided by the JR3 acceleration sensor and angular ac-
+RTLS approach can be observed regardless of the employed                   celerations based on the filtering approach. Concerning our
+load, trajectory, and acceleration signal source. Regarding                experimental setup, combining angular acceleration signals
+
+                                                                       3851
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                R EFERENCES
+                   0.1
+                                                                                   [1] J. Gámez Garcı́a, A. Robertsson, J. Gómez Ortega, and R. Johansson.
+                  0.08    True value                                                   Generalized contact force estimator for a robot manipulator. In Proc.
+                                                                                       of IEEE International Conference on Robotics and Automation, pages
+      mc in kgm
+
+
+
+
+                  0.06                                                                 4019–4024, 2006.
+                                                                                   [2] T. Kröger, D. Kubus, and F. M. Wahl. 6d force and acceleration sensor
+            z
+
+
+
+
+                  0.04                                                                 fusion for compliant manipulation control. In Proc. of IEEE/RSJ
+                                                              RIV
+                                                              RTLS                     International Conference on Intellegent Robots and Systems, pages
+                  0.02                                                                 2626–2631, 2006.
+                                                                                   [3] D. Kubus, T. Kröger, and F. M. Wahl. Improving force control perfor-
+                    0
+                     0          500         1000       1500          2000              mance by computational elimination of non-contact forces/torques. In
+                                         Time in ms                                    Proc. of IEEE International Conference on Robotics and Automation,
+                                                                                       2008.
+                                                                                   [4] D. Kubus, T. Kröger, and F. M. Wahl. On-line rigid object recognition
+Fig. 8.           Evolution of the estimate of mcz over time using o2 and tr2 .        and pose estimation based on inertial parameters. In Proc. of IEEE/RSJ
+                                                                                       International Conference on Intellegent Robots and Systems, 2007.
+                                                                                   [5] C.H. An, C. G. Atkeson, and J. M. Hollerbach. Model-based Control
+                                                                                       of a Robot Manipulator. The MIT Press series in artificial intelligence.
+                                                                                       The MIT Press, 1988.
+                                                                                   [6] K. Kozlowski. Modelling and Identification in Robotics. Advances in
+                                                                                       Industrial Control. Springer, 1998.
+                                                                                   [7] M. Niebergall and H. Hahn. Development of a measurement robot for
+                                                                                       identifying all inertia parameters of a rigid body in a single experiment.
+                                                                                       IEEE Transactions on Control Systems Technology, 9(2):416–423,
+                                                                                       March 2001.
+                                                                                   [8] A. Winkler and J. Suchy. Dynamic force/torque measurement using
+                                                                                       a 12dof sensor. In Proc. of IEEE/RSJ International Conference on
+                                                                                       Intellegent Robots and Systems, pages 1870–1875, 2007.
+                                                                                   [9] P. J. McKerrow. Introduction to Robotics. Addison-Wesley Publishers
+                                                                                       Ltd., 1991.
+                                                                                  [10] T. Kröger, D. Kubus, and F. M. Wahl. 12d force and acceleration
+                                                                                       sensing: A helpful experience report on sensor characteristics. In Proc.
+                                                                                       of IEEE International Conference on Robotics and Automation, 2008.
+                                                                                  [11] J. Swevers, C. Ganseman, D. B. Tükel, J. de Schulter, and H. Van
+Fig. 9. Relative RTLS estimation errors using o1 and tr2 , but different               Brussel. Optimal robot excitation and identification. IEEE Trans. on
+acceleration and angular velocity signals.                                             Robotics and Automation, 13(5):730–739, 1997.
+                                                                                  [12] J. Swevers, W. Verdonck, B. Naumer, S. Pieters, and E. Biber. An
+                                                                                       experimental robot load identification method for industrial applica-
+                                                                                       tion. The International Journal of Robotics Research, 21(8):701–712,
+based on the filtering approach with linear acceleration                               2002.
+signals provided by the JR3 sensor yields the best results.                       [13] M. Gautier and W. Khalil. Exciting trajectories for the identifcation
+                                                                                       of base inertial parameters of robots. The International Journal of
+                                                                                       Robotics Research, 11(4):362–375, 1992.
+                                  VI. C ONCLUSION                                 [14] D. J. Pierce and R. J. Plemmons. Tracking the condition number
+                                                                                       for RLS in signal processing. Mathematics of Control, Signals, and
+   An on-line total least-squares approach to inertial pa-                             Systems, 5(1):23–39, 1992.
+rameters estimation of robot loads has been presented. The                        [15] The     MathWorks        Inc.           The     mathworks       homepage.
+proposed estimation approach considers errors in both the                              http://www.mathworks.com/products/optimization/functionlist.html
+                                                                                       [date: 02/15/2008]. Internet, 2008.
+data matrix which contains accelerations and angular veloc-                       [16] D. Kubus, T. Kröger, and F. M. Wahl. Estimating inertial load
+ities and the measurement vector that contains forces and                              parameters using force/torque and acceleration sensor fusion. In VDI-
+torques. In contrast to the proposed recursive total least-                            Bericht Nr. 2012, 2008.
+                                                                                  [17] L. Ljung. System Identification: Theory for the User. Prentice Hall,
+squares (RTLS) approach, ordinary least-squares approaches                             1999.
+merely consider errors in the measurement vector and as-                          [18] M. Brand. Incremental singular value decomposition of uncertain data
+sume the elements of the data matrix to be error-free thus                             with missing values. In Proceedings of the ECCV 2002, Lecture Notes
+                                                                                       on Computer Science 2350, 2002.
+ignoring the effects of noise that affects the acceleration                       [19] D. L. Boley and K. T. Sutherland. Recursive total least squares: An
+measurements. Experiments comparing the performance of                                 alternative to the discrete kalman filter. Technical Report TR 93-32,
+two popular parameter estimation methods, i.e., the recursive                          University of Minnesota, 1993.
+                                                                                  [20] J. L. Barlow and P. A. Yoon. Solving recursive tls problems using
+least-squares method (RLS), and the recursive instrumental                             the rank-revealing ulv decomposition. In Proceedings of the second
+variables method (RIV), with the performance of the pro-                               international workshop on recent advances in total least squares tech-
+posed recursive total least-squares method (RTLS) clearly                              niques and errors-in-variables modeling, pages 117–126, Philadelphia,
+                                                                                       PA, USA, 1997. Society for Industrial and Applied Mathematics.
+recommend the latter approach, that proves superior regard-                       [21] M. Gu and S. C. Eisenstat. A stable and fast algorithm for updating
+less of the employed load and trajectory.                                              the singular value decomposition. Technical report, Yale University,
+                                                                                       New Haven, 1994.
+                               ACKNOWLEDGMENTS                                    [22] G. H. Golub and C. F. Van Loan. Matrix Computations. The Johns
+                                                                                       Hopkins University Press, 1990.
+   We would like to thank QNX Software Systems for pro-                           [23] W. H. Press, S. A. Teukolski, W. T. Vetterling, and B. P. Flannery.
+viding free software licenses as well as Harald Meyer-Kirk                             Numerical Receipes in C++. Cambridge University Press, 2002.
+                                                                                  [24] B. Finkemeyer, T. Kröger, and F. M. Wahl. Executing assembly
+and Lars Regner for manufacturing mechanical accessories                               tasks specified by manipulation primitive nets. Advanced Robotics,
+for the experimental setup.                                                            19(5):591–611, June 2005.
+
+                                                                             3852
+
+
+Authorized licensed use limited to: The University of Toronto. Downloaded on December 23,2025 at 00:42:19 UTC from IEEE Xplore. Restrictions apply.
+
