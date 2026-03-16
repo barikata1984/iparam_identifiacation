@@ -42,4 +42,4 @@ roslaunch iparam_identification replay_excitation_trajectory.launch \
 
 ## 既知の問題
 
-- スクリプト内で F/T センサの再ゼロ化が発生する箇所がある（`deactivate_compliance()` 内部呼び出し + 明示的 `zero_ft_sensor()`）。物体把持状態での再ゼロ化は起動前のゼロ点を破壊するため、除去が必要。
+→ `docs/ISSUES.md` を参照

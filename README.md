@@ -35,7 +35,7 @@ iparam_identification/
 │   ├── tool0_kinematics.launch     # 運動学ノード単体
 │   └── preview_trajectory.launch   # 軌道プレビュー用 RViz
 ├── data/trajectories/              # 加振軌道 JSON
-├── notes/                          # 設計ノート・分析記録
+├── docs/                           # ドキュメント（ISSUES/TODO/LOGS + 参照文書）
 ├── literature/                     # 参考文献 PDF
 └── results/                        # 同定結果出力（gitignore）
 ```
@@ -83,7 +83,7 @@ TLS は `min ||D[E|r]T||_F` を解く。重み行列 D, T の理論的意味:
 - **T**: 各列（変数）のノイズレベルの逆数 — ノイズが小さい列をより信頼
 - **D**: 各行（観測）の信頼度
 
-現在の実装ではデータの標準偏差ベースのスケーリングを使用。ノイズベースのスケーリングへの改善を検討中（詳細: `notes/tls_scaling_analysis.md`）。
+現在の実装ではデータの標準偏差ベースのスケーリングを使用。ノイズベースのスケーリングへの改善を検討中（詳細: `docs/LOGS/log_tls_scaling.md`）。
 
 ## 参考文献
 
