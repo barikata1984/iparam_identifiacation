@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<launch>
+    <!--
+    Launch file for trajectory preview in RViz.
+
+    This creates a separate robot_state_publisher for preview purposes,
+    so the real robot's joint states are not affected.
+
+    Usage:
+        roslaunch iparam_identification preview_trajectory.launch
+    -->
+
+    <!-- Arguments -->
+    <arg name="rviz_config" default="$(find iparam_identification)/launch/trajectory_preview.rviz"/>
+    <arg name="ur_type" default="ur5e"/>
+
+    <!-- Generate URDF from xacro (same as the real robot uses) -->
+    <param name="preview_robot_description" command="xacro '$(find ur_description)/urdf/$(arg ur_type).xacro'"/>
+
+    <!-- Robot state publisher for preview (subscribes to /preview/joint_states) -->
+    <node name="preview_robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
+        <remap from="robot_description" to="preview_robot_description"/>
+        <remap from="joint_states" to="/preview/joint_states"/>
+        <param name="tf_prefix" value="preview"/>
+        <param name="publish_frequency" value="50"/>
+    </node>
+
+    <!-- Static TF: link base_link to preview/base_link (same position) -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="preview_base_link_broadcaster"
+          args="0 0 0 0 0 0 base_link preview/base_link"/>
+
+    <!-- RViz -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)" if="$(eval rviz_config != '')"/>
+
+</launch>
