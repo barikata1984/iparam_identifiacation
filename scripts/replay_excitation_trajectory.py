@@ -39,13 +39,19 @@ sys.path.insert(0, str(OSX_BILATERAL_ROOT))
 import matplotlib  # noqa: E402
 import message_filters  # noqa: E402
 import rospy  # noqa: E402
-from geometry_msgs.msg import Vector3, WrenchStamped  # noqa: E402
+from geometry_msgs.msg import WrenchStamped  # noqa: E402
 from sensor_msgs.msg import JointState  # noqa: E402
 from src.core.terminal import check_enter_pressed  # noqa: E402
 from src.teleop.config import TeleopConfig  # noqa: E402
 from src.teleop.factory import create_teleop_components  # noqa: E402
 from std_msgs.msg import Bool, Float64MultiArray  # noqa: E402
 from ur_control.fzi_cartesian_compliance_controller import CompliantController  # noqa: E402
+from utilities.tool0_kinematics import (  # noqa: E402
+    JOINT_ORDER,
+    Tool0KinematicsCalculator,
+    reorder_joint_state,
+)
+from utilities.wrist_end_kinematics_utils import get_regressor_matrix  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -65,7 +71,6 @@ class ExcitationTrajectoryReplayNode:
         # --- ROS parameters ---
         trajectory_path = rospy.get_param("~trajectory_path", DEFAULT_TRAJECTORY)
         self.wrench_topic = rospy.get_param("~wrench_topic", "/wrench")
-        self.kinematics_ns = rospy.get_param("~kinematics_ns", "/tool0_kinematics")
         self.trim_start = rospy.get_param("~trim_start", 1.0)
         self.trim_end = rospy.get_param("~trim_end", 4.0)
 
@@ -95,33 +100,25 @@ class ExcitationTrajectoryReplayNode:
         self.controller = self.teleop_components.controller
         self.robot = self.teleop_components.robot
 
-        # --- Synchronized data recording (same pattern as batch_identifier.py) ---
+        # --- Synchronized data recording ---
+        # Kinematics are computed directly in the callback (not via external node)
+        # to guarantee la/regressor/wrench consistency within each frame.
         self.recorded_frames: list[dict] = []
         self.is_recording = False
+        self._ur_joint_names = set(JOINT_ORDER)
+
+        cutoff_freq = rospy.get_param("~cutoff_freq", 10.0)
+        gravity_list = rospy.get_param("~gravity", [0.0, 0.0, -9.81])
+        self._kinematics = Tool0KinematicsCalculator(acc_cutoff_freq=cutoff_freq)
+        self._gravity = np.array(gravity_list)
 
         self.sub_joint = message_filters.Subscriber("/joint_states", JointState)
         self.sub_wrench = message_filters.Subscriber(self.wrench_topic, WrenchStamped)
-        self.sub_lv = message_filters.Subscriber(f"{self.kinematics_ns}/lv_tool0", Vector3)
-        self.sub_av = message_filters.Subscriber(f"{self.kinematics_ns}/av_tool0", Vector3)
-        self.sub_la = message_filters.Subscriber(f"{self.kinematics_ns}/la_tool0", Vector3)
-        self.sub_aa = message_filters.Subscriber(f"{self.kinematics_ns}/aa_tool0", Vector3)
-        self.sub_regressor = message_filters.Subscriber(
-            f"{self.kinematics_ns}/regressor", Float64MultiArray
-        )
 
         self.ts = message_filters.ApproximateTimeSynchronizer(
-            [
-                self.sub_joint,
-                self.sub_wrench,
-                self.sub_lv,
-                self.sub_av,
-                self.sub_la,
-                self.sub_aa,
-                self.sub_regressor,
-            ],
+            [self.sub_joint, self.sub_wrench],
             queue_size=100,
             slop=0.01,
-            allow_headerless=True,
         )
         self.ts.registerCallback(self._recording_callback)
 
@@ -134,24 +131,43 @@ class ExcitationTrajectoryReplayNode:
         rospy.loginfo("ExcitationTrajectoryReplayNode initialized.")
 
     # =========================================================================
-    # Data recording callback (same as batch_identifier.py)
+    # Data recording callback
     # =========================================================================
 
-    def _recording_callback(self, joint_msg, wrench_msg, lv_msg, av_msg, la_msg, aa_msg, reg_msg):
+    def _recording_callback(self, joint_msg, wrench_msg):
         if not self.is_recording:
             return
 
+        # Filter non-UR messages (e.g. Robotiq gripper)
+        if not self._ur_joint_names.issubset(joint_msg.name):
+            return
+
+        # Reorder joints to Pinocchio model order
+        q, v = reorder_joint_state(
+            list(joint_msg.name), list(joint_msg.position), list(joint_msg.velocity)
+        )
+        t = joint_msg.header.stamp.to_sec()
+
+        # Compute kinematics directly (no external node dependency)
+        result = self._kinematics.compute_with_gravity(q, v, t, self._gravity)
+        la = result["proper_linear_acceleration"]
+        av = result["angular_velocity"]
+        aa = result["angular_acceleration"]
+
+        # Build regressor from the SAME kinematics result (guaranteed consistent)
+        regressor = get_regressor_matrix(linear_acc=la, angular_vel=av, angular_acc=aa)
+
         frame = {
-            "time": joint_msg.header.stamp.to_sec(),
-            "joint_position": list(joint_msg.position),
-            "joint_velocity": list(joint_msg.velocity),
+            "time": t,
+            "joint_position": q.tolist(),
+            "joint_velocity": v.tolist(),
             "tool0_kinematics": {
-                "lv": [lv_msg.x, lv_msg.y, lv_msg.z],
-                "av": [av_msg.x, av_msg.y, av_msg.z],
-                "la": [la_msg.x, la_msg.y, la_msg.z],
-                "aa": [aa_msg.x, aa_msg.y, aa_msg.z],
+                "lv": result["linear_velocity"].tolist(),
+                "av": av.tolist(),
+                "la": la.tolist(),
+                "aa": aa.tolist(),
             },
-            "regressor": np.array(reg_msg.data).reshape(6, 10).tolist(),
+            "regressor": regressor.tolist(),
             "wrench": [
                 wrench_msg.wrench.force.x,
                 wrench_msg.wrench.force.y,

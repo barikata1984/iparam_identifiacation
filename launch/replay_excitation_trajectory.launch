@@ -45,21 +45,16 @@
         <param name="config_path" value="$(arg teleop_config)"/>
     </node>
 
-    <!-- ========== Kinematics ========== -->
-
-    <!-- Pinocchio-based Kinematics Node -->
-    <include file="$(find iparam_identification)/launch/tool0_kinematics.launch">
-        <arg name="cutoff_freq" value="$(arg cutoff_freq)"/>
-    </include>
-
     <!-- ========== Main Node ========== -->
 
-    <!-- Excitation Trajectory Replay Node -->
+    <!-- Excitation Trajectory Replay Node
+         Kinematics are computed directly inside the node (no external kinematics node needed).
+         This guarantees la/regressor/wrench consistency within each recorded frame. -->
     <node pkg="iparam_identification" type="replay_excitation_trajectory.py"
           name="excitation_replay" output="screen" required="true">
         <param name="trajectory_path" value="$(arg trajectory)"/>
         <param name="wrench_topic" value="$(arg wrench_topic)"/>
-        <param name="kinematics_ns" value="/tool0_kinematics"/>
+        <param name="cutoff_freq" value="$(arg cutoff_freq)"/>
         <param name="trim_start" value="$(arg trim_start)"/>
         <param name="trim_end" value="$(arg trim_end)"/>
     </node>
