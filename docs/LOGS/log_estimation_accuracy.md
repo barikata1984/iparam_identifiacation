@@ -62,6 +62,58 @@ recording callback 内で kinematics を直接計算する方式に変更後の�
 OLS+bias の 249g は 120g の約 2 倍。バイアスと質量の分離が不十分な可能性あり。
 OLS raw の 53g は変わらず、I-5 は未解決。
 
+## 2026-03-16: I-5 根本原因の特定 — `/wrench` データソース問題
+
+### LS プロセスの検証
+
+合成データ (10 パラメータ線形回帰) で OLS (`np.linalg.lstsq`) と TLS (`solve_tls_weighted`) を検証。
+ノイズなしで機械精度復元、ノイズありでもフレーム数増加で精度向上。全 10 テスト PASS。
+→ ソルバー自体は健全。問題はインプット側にある。
+
+### リグレッサ・wrench・キネマティクスの並列調査
+
+3 サブエージェントで同時調査した結果:
+- **リグレッサ構築**: Kubus et al. 2008 Eq.5-6 と一致。Lynch & Park 版との差 < 5.55e-17。問題なし
+- **wrench 処理**: 座標系・符号・順序すべて正しい。問題なし
+- **キネマティクス**: Pinocchio ベースの主実装は正しい（proper acceleration, LOCAL frame）。問題なし
+
+### `/wrench` = `actual_TCP_force` の発見
+
+UR ROS ドライバ `hardware_interface.cpp:534` を確認:
+```cpp
+readData(data_pkg, "actual_TCP_force", fts_measurements_);
+```
+RTDE ドキュメントより: `actual_TCP_force` = 「ペイロード補償済み。ゼロ化影響あり」
+
+### UR ブレーキリリース時の自動ゼロ化を実証
+
+スクリプト未起動状態で `/wrench` を監視:
+- 起動時姿勢: 全成分 ≈ 0（グリッパ 960g が見えない）
+- 姿勢変更後: Fy ≈ 11N, Fz ≈ -10N（重力方向変化分のみ出現）
+- UR フォーラムで確認: 「When UR is powered on, the sensor is also reset」
+
+### `ft_raw_wrench` の実機確認
+
+`check_ft_raw.py` で RTDE 経由の `ft_raw_wrench` を 4 姿勢で計測:
+- 構造的プリロード: Fz ≈ 25400N（センサ締結力）
+- 重力射影ゼロの 2 姿勢 (フランジ Z = ベース X, Y): Fz ≈ 25396-25397（一致）
+- フランジ Z = ±ベース Z: Fz ≈ 25408 / 25385（±11.5N の対称変動 = 重力パターン）
+- `ft_raw_wrench` は起動時ゼロ化の影響を受けていない
+
+### I-5 の根本原因
+
+1. `actual_TCP_force` の起動時ゼロ化で F/T の絶対値が失われる
+2. バイアス列 (6 列) で定数オフセットを吸収しようとしても、質量列の重力定常成分と共線性が発生
+3. OLS raw (53g): ゼロ化で重力成分が消え、動的成分のみから推定 → 過小推定
+4. OLS+bias (249g): バイアスと質量の分離不良 → 過大推定
+
+### 次のステップ
+
+`ft_raw_wrench` への移行 + プリロードキャリブレーション（6 面体姿勢計測）を計画。
+計画ファイル: `.claude/plans/radiant-roaming-moon.md`
+
+---
+
 ## 2026-03-15: I-1 修正
 
 `replay_excitation_trajectory.py` の全 F/T 再ゼロ化箇所を除去。
