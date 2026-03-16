@@ -27,7 +27,10 @@ from geometry_msgs.msg import Vector3
 from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import JointState
 
-from utilities.tool0_kinematics import Tool0KinematicsCalculator, reorder_joint_state
+from utilities.tool0_kinematics import JOINT_ORDER, Tool0KinematicsCalculator, reorder_joint_state
+
+# Set for O(1) membership check in callback
+_UR_JOINT_NAMES = set(JOINT_ORDER)
 from utilities.wrist_end_kinematics_utils import get_regressor_matrix
 
 
@@ -61,6 +64,10 @@ class Tool0KinematicsNode:
 
     def joint_state_cb(self, msg: JointState):
         """Process joint state and publish kinematics."""
+        # Ignore non-UR messages (e.g. Robotiq gripper publishes 1-joint states)
+        if not _UR_JOINT_NAMES.issubset(msg.name):
+            return
+
         # Reorder joint state to match pinocchio model
         q, v = reorder_joint_state(
             list(msg.name), list(msg.position), list(msg.velocity)
