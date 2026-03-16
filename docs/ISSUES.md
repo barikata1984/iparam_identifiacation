@@ -6,53 +6,62 @@
 
 ---
 
-## I-1: 励起軌道リプレイ中の F/T センサ再ゼロ化
+## I-1: 励起軌道リプレイ中の F/T センサ再ゼロ化 (**修正済み**)
 
-**発見**: 2026-03-15
+**発見**: 2026-03-15 / **修正**: 2026-03-15 (`daa2939`)
 
-`replay_excitation_trajectory.py` Phase 3 で物体把持後に F/T センサが再ゼロ化される。
+`replay_excitation_trajectory.py` で物体把持後に F/T センサが再ゼロ化され、ペイロード重量を相殺するバイアスが発生していた。Phase 1 deactivate + Phase 3 deactivate_compliance + Phase 3 明示的 zero_ft_sensor の 3 箇所を修正。
 
-- `deactivate_compliance()` (line 232) が内部で `zero_ft_sensor()` を呼び出す
-- 明示的 `zero_ft_sensor()` (line 248) でも再ゼロ化
-- UR の `zero_ftsensor` は呼出時の読み値を定数オフセットとして差し引くため、物体重量分のバイアスが全測定から除去される
-- リグレッサは `F = m * a_proper` を仮定するが、測定値は `F_true(q) - F_true(q0)` となり定数バイアスが発生
-- 120g 物体でバイアス ~1.18 N + グリッパ重量 — ペイロード信号 (~1.18 N) と同等以上
-- 結果: 質量推定が 180g / 10g / 負値など異常値になる
-
-**対応**: Phase 3 の `deactivate_compliance()` と `zero_ft_sensor()` を除去し、ドライバ起動時のゼロ点を維持 → TODO 参照
+修正後も 55g 推定が持続したため、**単独の主因ではない**が、正しい修正。
 
 ---
 
-## I-2: リグレッサ行列 Row 5, 6 の交差慣性項バグ
+## I-2: リグレッサ行列 Row 5, 6 の交差慣性項バグ (**修正済み**)
 
-**発見**: 2026-03-15
+**発見**: 2026-03-15 / **修正**: 2026-03-15 (`0671248`)
 
-`wrist_end_kinematics_utils.py` の `get_regressor_matrix()` で Row 5 (Ny) と Row 6 (Nz) の交差慣性項に入れ替えバグがある。Row 4 (Nx) は正しい。
+`wrist_end_kinematics_utils.py` の Row 5 (Ny), Row 6 (Nz) の交差慣性項を `dynamics_utils.py` (Lynch & Park) に合わせて修正。10 テストケースで一致確認。
 
-- Row 5: Iyy <-> Ixy スワップ、Iyz <-> Izx スワップ
-- Row 6: Ixy/Iyz/Izx の循環置換 + Ixy 係数の変数誤り (wx^2 -> wz^2)
-- `dynamics_utils.py` に Lynch & Park ベースの正しい実装が存在するが、`tool0_kinematics_node.py` はバグ版を使用
-
-**影響**: 慣性テンソル推定が直接狂い、最小二乗のカップリングで質量・重心にも波及（I-1 より影響は軽微）
-
-**対応**: `dynamics_utils.py` の正しい実装を参照して Row 5, 6 を修正 → TODO 参照
+修正後も 55g 推定が持続。慣性項のみの影響で 120g→55g の変化は説明不可。
 
 ---
 
-## I-4: headerless メッセージ同期によるデータ不整合
+## I-4: 記録データの la/regressor 不整合（q=0 汚染）
 
 **発見**: 2026-03-15
 
-`replay_excitation_trajectory.py` の `ApproximateTimeSynchronizer` が headerless メッセージ (`Vector3`, `Float64MultiArray`) を受信時刻で同期するため、500Hz の kinematics コールバック間でメッセージが混在する。
+`tool0_kinematics_node` が `/joint_states` を無差別に購読し、非 UR メッセージ（Dynamixel/グリッパ）に対して q=[0,0,0,0,0,0] で計算。結果として一部フレーム (19/69) の la または regressor が q=0 由来の誤った値を含む。
 
-- `la_tool0` (proper acc) と `regressor` が異なる計算サイクルのデータを含む
-- 記録データで regressor mass 列と la が完全不一致（重力方向すら異なる）
-- `S * φ = W` の関係が原理的に成立せず、同定が破綻
-- 記録フレームレートも 49 Hz（500Hz の 1/10）で大量のフレーム欠損
+**検証結果**: q=0 汚染フレームを除去しても質量推定は同じ 55g → **55g 推定の主因ではない**
 
-**影響**: I-1, I-2 修正後も 120g 物体で 55g と推定される主因
+データ品質の問題として修正すべきだが、推定精度に対する影響は限定的。
 
-**対応**: kinematics 計算を recording node 内で直接実行し、メッセージ同期を排除 → TODO 参照
+---
+
+## I-5: 120g 物体に対する 55g 推定（原因未特定）
+
+**発見**: 2026-03-15
+
+I-1, I-2 修正後、120g 物体の質量推定が一貫して 55g (約 46%)。
+
+**棄却済み仮説**:
+- F/T 再ゼロ化 (I-1): 修正済みだが 55g 持続
+- リグレッサバグ (I-2): 慣性項のみ。修正済みだが 55g 持続
+- q=0 汚染 (I-4): clean/dirty フレームで同じ 55g
+- ツール重量姿勢バイアス: 理論予測では m_ols ≥ 120g（方向が逆）
+- wrench 符号規約: 過去に検証済み（payload→sensor、反転不要）
+
+**残る手がかり**: 55g ≈ 120g × 0.46。系統的に力が過小か加速度が過大。原因未特定。
+
+---
+
+## I-3: TLS スケーリング行列がデータ分散ベース
+
+**発見**: 2026-03-12
+
+`tls.py` の `COLUMN_ONLY` モードで `T = diag(1/std(列))` を使用。std はデータのばらつき（信号+ノイズ）であり、ノイズレベルではない。高加振列（良い SNR）の信頼度が不当に低く扱われる。
+
+**対応**: `ScalingMode.NOISE_BASED` を追加（diff ベースのノイズ推定）→ TODO 参照
 
 ---
 

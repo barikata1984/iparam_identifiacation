@@ -4,22 +4,17 @@
 
 ---
 
-## 推定精度修正（I-1, I-2）
+## 推定精度修正
 
-- [x] Step 1: F/T 再ゼロ化を全箇所で除去 (I-1)
-  - Phase 1: `controller.deactivate()` → teleop pub + `activate_joint_trajectory_controller()` に置換
-  - Phase 3: `deactivate_compliance()` → `activate_joint_trajectory_controller()` に置換
-  - Phase 3: 明示的 `zero_ft_sensor()` を削除
-  - ドライバ起動時（物体なし）のゼロ点を維持する設計に変更
-- [ ] Step 2: リグレッサ行列 Row 5, 6 を修正 (I-2)
-  - `wrist_end_kinematics_utils.py` の Row 5 (Ny) と Row 6 (Nz) の交差慣性項を修正
-  - `dynamics_utils.py` (Lynch & Park bullet 演算子) の正しい実装を参照
-  - 検証テスト追加（omega=[1,0,0] 等で dynamics_utils と一致確認）
-- [ ] Step 3: メッセージ同期の排除 (I-4)
-  - recording callback 内で `Tool0KinematicsCalculator` を直接呼び出す
-  - `/joint_states` + `/wrench` の 2 トピック同期のみに簡素化
-  - kinematics node の 5 トピック subscribe を廃止
-- [ ] Step 4: 実機で再推定し、120g 物体に対して正常な推定値を確認
+- [x] Step 1: F/T 再ゼロ化を全箇所で除去 (I-1) — `daa2939`
+- [x] Step 2: リグレッサ行列 Row 5, 6 を修正 (I-2) — `0671248`
+  - `dynamics_utils.py` と 10 テストケースで一致確認
+- [ ] Step 3: 55g 推定の原因特定 (I-5)
+  - 棄却済み: I-1, I-2, q=0 汚染, ツール重量姿勢バイアス, wrench 符号規約
+  - 次候補: 実機で静止状態の wrench 生値と proper acceleration を直接確認し、力/加速度比が物体質量と一致するか検証
+- [ ] Step 4: q=0 汚染の修正 (I-4)
+  - `tool0_kinematics_node` で非 UR メッセージをフィルタ、または recording 側で直接計算
+- [ ] Step 5: 実機で再推定し、120g 物体に対して正常な推定値を確認
 
 ---
 
