@@ -1,7 +1,21 @@
 #!/usr/bin/env python3
+import os
 import rospy
 import numpy as np
+import atexit
+import matplotlib
+
+# Use interactive backend for popup plots if DISPLAY is available
+if os.environ.get("DISPLAY"):
+    try:
+        matplotlib.use("TkAgg")
+    except Exception:
+        pass
 import matplotlib.pyplot as plt
+
+# Ensure all figures are closed on main thread before GC runs,
+# preventing tkinter "main thread is not in main loop" errors at shutdown.
+atexit.register(plt.close, "all")
 import sys
 import select
 import termios
