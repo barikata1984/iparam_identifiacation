@@ -194,8 +194,14 @@ class ExcitationTrajectoryReplayNode:
             self.controller.step()
             rate.sleep()
 
-        self.controller.deactivate()
-        print("  Teleop deactivated.")
+        # Deactivate teleop WITHOUT zeroing F/T sensor.
+        # controller.deactivate() is not used because it calls zero_ft_sensor()
+        # twice (directly + via deactivate_compliance), which would destroy the
+        # zero point set at driver startup (object-free).
+        if self.controller._teleop_active_pub:
+            self.controller._teleop_active_pub.publish(Bool(False))
+        self.robot._arm.activate_joint_trajectory_controller()
+        print("  Teleop deactivated (F/T zero point preserved).")
 
     # =========================================================================
     # Phase 2: Close gripper
@@ -228,8 +234,12 @@ class ExcitationTrajectoryReplayNode:
 
         input("  Press ENTER to move to start pose (Ctrl+C to abort)...")
 
-        # Ensure joint trajectory controller is active
-        self.robot.deactivate_compliance()
+        # Switch to joint trajectory controller WITHOUT zeroing F/T sensor.
+        # deactivate_compliance() is NOT used here because it internally calls
+        # zero_ft_sensor(), which would destroy the zero point set at driver
+        # startup (object-free). The regressor includes gravity via proper
+        # acceleration, so the sensor must measure the full payload wrench.
+        self.robot._arm.activate_joint_trajectory_controller()
         self.robot.move_to_joints(q0, duration=5.0)
         rospy.sleep(1.0)
 
@@ -242,12 +252,7 @@ class ExcitationTrajectoryReplayNode:
         if np.max(error_deg) > 2.0:
             rospy.logwarn(f"Position error exceeds 2 deg: {np.max(error_deg):.2f}")
 
-        # Zero F/T sensor at the trajectory start pose (tool-only, before grasping payload).
-        # The regressor includes gravity via proper acceleration, so the sensor must
-        # measure the full payload wrench. Zeroing here removes tool weight bias.
-        self.robot.zero_ft_sensor()
-        rospy.sleep(0.3)
-        print("  F/T sensor zeroed. Ready for trajectory replay.")
+        print("  Ready for trajectory replay.")
 
     # =========================================================================
     # Phase 4: Replay trajectory and record data
