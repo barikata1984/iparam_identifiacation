@@ -1,0 +1,66 @@
+<launch>
+    <!--
+        Excitation Trajectory Replay with Inertial Parameter Identification
+
+        Workflow:
+        1. Free teleoperation to grasp object (via Dynamixel leader arm)
+        2. Close gripper
+        3. Move to excitation trajectory start pose
+        4. Replay trajectory with data recording
+        5. Identify inertial parameters (trim window)
+        6. Re-sync leader arm
+
+        Prerequisites (must be running separately):
+        - UR driver: roslaunch osx_ur5e connect_real_robot.launch
+
+        Usage:
+            roslaunch iparam_identification replay_excitation_trajectory.launch
+            roslaunch iparam_identification replay_excitation_trajectory.launch leader_port:=/dev/ttyUSB1
+    -->
+
+    <!-- ========== Arguments ========== -->
+    <arg name="trajectory" default="$(find iparam_identification)/data/trajectories/excitation_trajectory.json"/>
+    <arg name="wrench_topic" default="/wrench"/>
+    <arg name="cutoff_freq" default="10.0"/>
+    <arg name="trim_start" default="1.0"/>
+    <arg name="trim_end" default="4.0"/>
+    <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
+    <arg name="teleop_config" default="$(find osx_bilateral)/configs/teleop.yaml"/>
+
+    <!-- ========== Teleop Infrastructure ========== -->
+
+    <!-- Dynamixel motor controller (leader arm) -->
+    <node pkg="dynamixel_sdk_examples"
+          type="sync_read_write_current_node"
+          name="sync_current_control_node"
+          output="screen">
+        <param name="device_name" value="$(arg leader_port)"/>
+    </node>
+
+    <!-- Haptic feedback publisher (gravity compensation) -->
+    <node pkg="osx_bilateral"
+          type="haptic_feedback_publisher.py"
+          name="haptic_feedback_publisher"
+          output="screen">
+        <param name="config_path" value="$(arg teleop_config)"/>
+    </node>
+
+    <!-- ========== Kinematics ========== -->
+
+    <!-- Pinocchio-based Kinematics Node -->
+    <include file="$(find iparam_identification)/launch/tool0_kinematics.launch">
+        <arg name="cutoff_freq" value="$(arg cutoff_freq)"/>
+    </include>
+
+    <!-- ========== Main Node ========== -->
+
+    <!-- Excitation Trajectory Replay Node -->
+    <node pkg="iparam_identification" type="replay_excitation_trajectory.py"
+          name="excitation_replay" output="screen" required="true">
+        <param name="trajectory_path" value="$(arg trajectory)"/>
+        <param name="wrench_topic" value="$(arg wrench_topic)"/>
+        <param name="kinematics_ns" value="/tool0_kinematics"/>
+        <param name="trim_start" value="$(arg trim_start)"/>
+        <param name="trim_end" value="$(arg trim_end)"/>
+    </node>
+</launch>
