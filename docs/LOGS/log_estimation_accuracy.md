@@ -112,6 +112,115 @@ RTDE ドキュメントより: `actual_TCP_force` = 「ペイロード補償済�
 `ft_raw_wrench` への移行 + プリロードキャリブレーション（6 面体姿勢計測）を計画。
 計画ファイル: `.claude/plans/radiant-roaming-moon.md`
 
+## 2026-03-16: Step 5a/5b — プリロードキャリブレーション基盤の構築
+
+ft_raw_wrench 移行の準備として、6面体姿勢定義・計測スクリプト・RViz プレビューを実装。
+
+### 作成ファイル
+
+1. **`src/calibration/cube_poses.py`** — 6面体姿勢定義モジュール
+   - `compute_cube_poses()`: Pinocchio CLIK (damped least-squares IK) で6姿勢を算出
+   - 基準姿勢 `[90, -90, 90, -90, -90, 0]` deg (フランジ Z = -Z) と同一TCP位置で6方向
+   - `CubePose` dataclass (label, flange_z_direction, joint_angles_rad)
+
+2. **`scripts/calibrate_ft_preload.py`** — 実機計測スクリプト (ur_rtde 直接、ROS不要)
+   - 各姿勢: ユーザ確認 → moveJ (0.5 rad/s) → 2s 静止 → 3s サンプリング (500Hz)
+   - 統計サマリ: プリロード推定値、姿勢間σ、最大偏差、ノイズσ
+   - JSON 保存: `results/ft_preload_calibration_<timestamp>.json`
+
+3. **`scripts/preview_cube_poses.py`** — RViz プレビュー (ROS ノード)
+   - 既存 `preview_trajectory.launch` を活用 (`/preview/joint_states` に publish)
+   - Enter で次姿勢、1-6 でジャンプ、a で自動サイクル (3s/pose)
+
+4. **`tests/test_cube_poses.py`** — 16 テスト全 PASS
+   - 各姿勢の FK 検証: フランジ Z が期待方向と一致 (atol=1e-4)
+   - TCP 位置が基準姿勢と一致 (atol=1mm)
+
+### 変更ファイル
+
+- `setup.py`: `calibration` パッケージ追加
+- `src/calibration/__init__.py`: 新規 (空)
+
+### 次のステップ
+
+5c: 実機で `calibrate_ft_preload.py` を実行し、プリロードの姿勢不変性を検証。
+
+## 2026-03-16: Step 5c — プリロードキャリブレーション実機計測と ft_raw_wrench 調査
+
+### 実施内容
+
+1. RViz プレビューに septic spline 遷移シミュレーションを追加（`preview_cube_poses.py` に `s` コマンド）
+2. `src/calibration/septic_spline.py` を新規作成（7次多項式 rest-to-rest 補間）
+3. `calibrate_ft_preload.py` を拡張し `actual_TCP_force` も同時収集
+4. bare flange で 3 回計測（18:42, 21:40/21:46, 22:05）
+
+### 計測結果: ft_raw_wrench preload の時間ドリフト
+
+| 成分 | 18:42 | 21:40 | 21:46 | 22:05 |
+|------|------:|------:|------:|------:|
+| Fx | 1806.56 | 1794.09 | 1794.11 | 1793.85 |
+| Fy | 419.80 | 392.91 | 392.94 | 392.45 |
+| Fz | 25382.72 | 25406.10 | 25405.98 | 25406.82 |
+| Tx | -7.365 | -7.888 | -7.882 | -7.890 |
+| Ty | -17.519 | -17.525 | -17.533 | -17.530 |
+| Tz | -76.733 | -75.964 | -76.037 | -75.914 |
+
+- 3 時間で Fy: -27, Fz: +23 のドリフト（温度依存と推定）
+- 6 分以内は安定（差分 < 0.1）
+- 19 分で Fy: -0.5 程度のドリフト
+- 19 分ドリフト × 9 ≈ 3 時間と仮定すると実際の 3 時間ドリフトの 1/3〜1/6 → 22 時時点でもまだ収束していない
+
+### 計測結果: actual_TCP_force（ペイロード 0 lbs 設定）
+
+- 全成分がほぼゼロ（mean < 0.3）→ N/Nm 単位の傍証
+- ただし姿勢間で最大 1.2 の偏差あり（15 分後は悪化）
+- `actual_TCP_force` もドリフトする
+
+### 各計測内の姿勢間ばらつき
+
+- ft_raw_wrench 姿勢間 σ ≈ 1.6（Fx, Fz）、ノイズ σ ≈ 0.1
+- 姿勢間ばらつきの意味: ft_raw_wrench はセンサフレームで出力されるため、異なる姿勢での値は異なる物理方向を指す → 単純なスカラー比較は不適切
+
+### ft_raw_wrench の公式定義（UR RTDE Guide）
+
+> "Raw force and torque measurement given in the Tool Flange frame. Not compensated for forces and torques caused by the payload. Not zeroed by zero_ftsensor()."
+
+- 座標系: Tool Flange frame（センサフレーム）
+- ペイロード補償なし、`zero_ftsensor()` の影響なし
+- **単位の明記なし**（UR 公式ドキュメントのどこにも記載がない）
+- Version 5.9.0 で追加
+
+### ft_raw_wrench の単位問題
+
+- Fz ≈ 25,406 がニュートンなら 2.5 トンに相当 → bare flange でありえない → **そのままニュートンではない**
+- Fx ≈ 1794, Fy ≈ 393, Fz ≈ 25406 と各軸で桁が大きく異なる → ストレインゲージのブリッジオフセット（ハードウェアバイアス）が支配的
+- 単位特定のために base フレームへの変換を試みたが、巨大なバイアスが回転して散るため有効な情報が得られず
+- 線形回帰（bias + α·c(i) モデル）では換算係数と質量が分離できず、ニュートン単位のゼロ補正には直結しない
+- **既知質量での実測が換算係数特定の最も確実な方法**
+
+### UR 内部実装の調査
+
+- `zero_ftsensor()`: 呼出時の観測値を定数オフセットとして記憶し減算（URScript マニュアル）
+- `set_target_payload(m, cog)`: 「The internal force/torque sensor in the robot tool is reset each time the payload is updated. This is similar to the behaviour of zero_ftsensor().」（URScript マニュアル 5.19）
+- 起動時の自動ゼロ化はペイロード設定の適用に付随して起こる可能性が高い
+- ペイロード補償が単純オフセットか姿勢依存の動的補償かは不明（UR コントローラファームウェアが非公開）
+- ur_rtde の `setPayload()`, `zeroFtSensor()` はコマンドを送るだけで、補償ロジックは UR コントローラ内部で処理
+
+### 未解決の問題
+
+1. ft_raw_wrench の単位が不明（ドキュメントに記載なし）
+2. 換算係数の特定方法が未確立（既知質量での実測が必要）
+3. 時間ドリフトがあり、プリロードを定数として扱うアプローチに限界がある
+4. 信号と力の線形関係が未検証
+
+### 参照先
+
+- UR RTDE Guide: `docs.universal-robots.com/tutorials/.../rtde-guide.html`
+- ur_rtde API: `sdurobotics.gitlab.io/ur_rtde/api/api.html`
+- URScript Manual 5.19 set_target_payload: `universal-robots.com/manuals/EN/HTML/SW5_19/Content/prod-scriptmanual/G5/set_target_payload.htm`
+- ur_rtde ソース: `gitlab.com/sdurobotics/ur_rtde/-/raw/master/src/rtde_control_interface.cpp`
+- 計測結果: `results/ft_preload_calibration_2026-03-16_*.json` (3 ファイル)
+
 ---
 
 ## 2026-03-15: I-1 修正

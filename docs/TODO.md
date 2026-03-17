@@ -15,9 +15,11 @@
   - `actual_TCP_force` のゼロ化オフセットとバイアス列の共線性が推定を破壊
 - [x] Step 4: q=0 汚染の修正 (I-4) — recording 内直接計算で解消済み
 - [ ] Step 5: `ft_raw_wrench` への移行 (I-6)
-  - [ ] 5a: プリロードキャリブレーション（6 面体姿勢で無負荷 ft_raw_wrench を計測）
-  - [ ] 5b: RViz で 6 姿勢プレビュー
-  - [ ] 5c: 実機でプリロード定数の姿勢不変性を検証
+  - [x] 5a: プリロードキャリブレーション（6 面体姿勢で無負荷 ft_raw_wrench を計測）
+  - [x] 5b: RViz で 6 姿勢プレビュー
+  - [x] 5c: 実機でプリロード計測（3 回実施、時間ドリフトと単位問題を発見）
+  - [ ] 5c': ft_raw_wrench の単位を特定する（既知質量での実測）
+  - [ ] 5c'': 時間ドリフトの収束条件を確認する（暖機時間の特定）
   - [ ] 5d: `replay_excitation_trajectory.py` を ft_raw_wrench 対応に改修
 - [ ] Step 6: グリッパキャリブレーション（物体なしで励起軌道実行 → φ_gripper 推定）
 - [ ] Step 7: 物体同定（差分法: φ_object = φ_total - φ_gripper）
