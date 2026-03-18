@@ -231,3 +231,82 @@ ft_raw_wrench 移行の準備として、6面体姿勢定義・計測スクリ�
 - Phase 3: `robot.deactivate_compliance()` → `arm.activate_joint_trajectory_controller()` に置換
 - Phase 3: 明示的 `robot.zero_ft_sensor()` + sleep を削除
 - osx_bilateral 側のコードは変更なし（`_arm` / `_teleop_active_pub` への直接アクセスで回避）
+
+## 2026-03-17: skip_teleop モード実装と実機計測
+
+### スクリプト改修
+
+`replay_excitation_trajectory.py` に `skip_teleop` モードを追加:
+- `skip_teleop:=true`: `CompliantController(gripper_type=None)` で直接初期化（テレオペ/グリッパ不要）
+- Phase 1 (teleop) / Phase 2 (gripper) / Phase 6 (resync) をスキップ
+- launch ファイルに `skip_teleop` arg 追加、Dynamixel/haptic ノードを `unless` で抑制
+
+マウント姿勢フローを追加:
+- Phase 3a: フランジ上向き姿勢 `[90, -90, 90, 90, -90, 0]` deg（J4 反転）に移動
+  → `zero_ftsensor` (bare flange) → wrench 表示 → グリッパ装着待ち → 装着後 wrench 表示
+- Phase 3b: 励起軌道開始姿勢 `[90, -90, 90, -90, -90, 0]` deg に移動 → wrench 表示
+
+### 実機計測結果
+
+#### Bare flange 同定（23:19:13）
+
+| パラメータ | OLS+bias | OLS raw |
+|-----------|---------|---------|
+| m [kg] | 0.012 | -0.006 |
+| mcx | 0.008 | 0.007 |
+| mcy | 0.085 | 0.027 |
+| mcz | 0.035 | 0.040 |
+
+期待通り全パラメータがゼロ近辺。パイプラインの動作確認として妥当。
+
+#### グリッパ付き同定（23:45:39） — ゼロ化手順に問題あり
+
+local→remote 切替時にプログラム再起動 → グリッパ装着状態で自動ゼロ化が発生。
+OLS raw: m = 0.025 kg（期待 ~1 kg）。起動時ゼロ化がグリッパ荷重を吸収（I-6 の再現）。
+OLS+bias: m = 0.980 kg, Fz bias = -9.35 N ≈ mg。バイアス列が重力を吸収。
+
+#### グリッパ付き同定（18:07:47） — マウント姿勢フロー使用
+
+マウント姿勢で zero_ftsensor (bare flange) → グリッパ装着 → ホーム移動。
+local/remote 切替なし。
+
+OLS raw: m = 0.298 kg（改善したが不十分）。
+OLS+bias: m = 0.959 kg。
+残差分析: Fx mean=+1.0, Fy mean=+1.0, Tx mean=-1.4 Nm の定数オフセットが残留。
+
+### ft_raw_wrench 単位の特定（I-7 解決）
+
+`check_ft_diff.py` で bare→loaded の差分を `actual_TCP_force` と `ft_raw_wrench` で同時計測:
+
+| 計測 | actual_TCP_force Fz diff [N] | ft_raw_wrench Fz diff | ratio |
+|------|------------------------------|----------------------|-------|
+| Run 1 | -8.79 | -8.79 | 1.0000 |
+| Run 2 | -10.66 | -10.66 | 1.0000 |
+| Run 3 | -8.97 | -8.97 | 1.0000 |
+
+**ft_raw_wrench の感度は 1 raw unit = 1 N**（全 3 回で一貫）。
+巨大なオフセット（Fz ≈ 25,400）は構造的プリロードだが、変化量はそのままニュートン。
+
+### F/T センサの短期揺らぎ発見（I-9）
+
+同一姿勢・同一ペイロードで 10 分間隔の差分計測にて ±5 N の変動を観測。
+Run 1, 3 は整合（-8.79, -8.97）、Run 2 は外れ値（-10.66）。
+bare 読み取り時に ft_raw_wrench Fz が +4 N 跳ねた後、loaded 読み取りまでに戻った。
+短期揺らぎは差分計測を汚染し、プリロードキャリブレーション精度に影響する。
+
+### 主要発見のまとめ
+
+1. `actual_TCP_force` の起動時ゼロ化は Polyscope 設定（TCP/ペイロード全ゼロ）でも回避不可
+2. UR プログラム再起動（local→remote 含む）で自動ゼロ化が発生
+3. `actual_TCP_force` と `ft_raw_wrench` の感度は 1:1（ゲイン誤差なし）
+4. F/T センサに ±5 N の短期揺らぎあり（I-8 の長期ドリフトとは別）
+5. ボルト締結プリロード仮説は棄却（Tz に影響なし + ボルトプリロードは内力ループ）
+
+### 作成ファイル
+
+- `scripts/check_ft_diff.py`: bare/loaded の actual_TCP_force + ft_raw_wrench 差分計測ツール
+
+### 次のステップ
+
+- I-9 の特性評価（揺らぎの時間スケール・分布の把握）
+- ft_raw_wrench ベースの同定への移行（Step 5d）: プリロードを軌道直前に計測し差し引く方式

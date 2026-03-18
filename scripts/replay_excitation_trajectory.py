@@ -45,6 +45,7 @@ from src.core.terminal import check_enter_pressed  # noqa: E402
 from src.teleop.config import TeleopConfig  # noqa: E402
 from src.teleop.factory import create_teleop_components  # noqa: E402
 from std_msgs.msg import Bool, Float64MultiArray  # noqa: E402
+from std_srvs.srv import Trigger  # noqa: E402
 from ur_control.fzi_cartesian_compliance_controller import CompliantController  # noqa: E402
 from utilities.tool0_kinematics import (  # noqa: E402
     JOINT_ORDER,
@@ -60,6 +61,11 @@ import matplotlib.pyplot as plt  # noqa: E402
 DEFAULT_TRAJECTORY = str(IPARAM_ROOT / "data" / "trajectories" / "excitation_trajectory.json")
 
 PARAM_NAMES = ["m", "mcx", "mcy", "mcz", "Ixx", "Iyy", "Izz", "Ixy", "Iyz", "Izx"]
+
+# Mounting pose: flange pointing UP for easy gripper attachment.
+# Same as excitation home [90, -90, 90, -90, -90, 0] deg but with J4 flipped: -90 -> +90.
+MOUNTING_POSE_DEG = [90.0, -90.0, 90.0, 90.0, -90.0, 0.0]
+MOUNTING_POSE_RAD = np.deg2rad(MOUNTING_POSE_DEG)
 
 
 class ExcitationTrajectoryReplayNode:
@@ -93,12 +99,23 @@ class ExcitationTrajectoryReplayNode:
         rospy.loginfo(f"  Trim window: [{self.trim_start}s, {self.trim_end}s]")
         rospy.loginfo(f"  Condition number: {metadata.get('condition_number', 'N/A')}")
 
-        # --- Teleop components (for grasping phase) ---
-        self.teleop_components = create_teleop_components(
-            TeleopConfig(), init_ros_node=False, use_cameras=False
-        )
-        self.controller = self.teleop_components.controller
-        self.robot = self.teleop_components.robot
+        # --- Robot control ---
+        self.skip_teleop = rospy.get_param("~skip_teleop", False)
+
+        if self.skip_teleop:
+            # Direct robot control without teleop/gripper (e.g. bare flange runs)
+            self._arm = CompliantController(gripper_type=None)
+            self.controller = None
+            self.robot = None
+            rospy.loginfo("Skip-teleop mode: no gripper, no leader arm.")
+        else:
+            # Full teleop components (for grasping phase)
+            self.teleop_components = create_teleop_components(
+                TeleopConfig(), init_ros_node=False, use_cameras=False
+            )
+            self.controller = self.teleop_components.controller
+            self.robot = self.teleop_components.robot
+            self._arm = self.robot._arm
 
         # --- Synchronized data recording ---
         # Kinematics are computed directly in the callback (not via external node)
@@ -232,34 +249,70 @@ class ExcitationTrajectoryReplayNode:
         print("  Gripper fully closed.")
 
     # =========================================================================
-    # Phase 3: Move to trajectory start pose
+    # Phase 3a: Move to mounting pose (flange up) and zero F/T sensor
+    # =========================================================================
+
+    def phase_mount_payload(self):
+        print("\n" + "=" * 60)
+        print("  PHASE 3a: MOUNTING POSE (flange UP)")
+        print("=" * 60)
+
+        current_deg = np.rad2deg(self._arm.joint_angles())
+        print(f"  Current (deg): {np.round(current_deg, 1).tolist()}")
+        print(f"  Target  (deg): {list(MOUNTING_POSE_DEG)}")
+
+        input("  Press ENTER to move to mounting pose (Ctrl+C to abort)...")
+
+        self._arm.activate_joint_trajectory_controller()
+        self._arm.set_joint_positions(target_time=5.0, positions=MOUNTING_POSE_RAD, wait=True)
+        rospy.sleep(1.0)
+
+        # Verify arrival
+        actual_deg = np.rad2deg(self._arm.joint_angles())
+        error_deg = np.abs(actual_deg - np.array(MOUNTING_POSE_DEG))
+        print(f"  Arrived (deg): {np.round(actual_deg, 1).tolist()}")
+        print(f"  Error   (deg): {np.round(error_deg, 2).tolist()}")
+
+        if np.max(error_deg) > 2.0:
+            rospy.logwarn(f"Position error exceeds 2 deg: {np.max(error_deg):.2f}")
+
+        # Zero F/T sensor (bare flange, flange up)
+        self._zero_ftsensor()
+        self._print_wrench("Wrench after zero_ftsensor (should be ~0):")
+
+        # Wait for user to attach payload
+        print()
+        print("  >>> ATTACH GRIPPER / PAYLOAD NOW <<<")
+        input("  Press ENTER after attachment is complete...")
+
+        # Show wrench with payload attached.
+        # Flange UP: tool0 Z points up, gravity pulls payload down → Fz ≈ -mg
+        self._print_wrench("Wrench with payload (flange UP, expect Fz ~ -mg):")
+
+    # =========================================================================
+    # Phase 3b: Move to trajectory start pose (flange down)
     # =========================================================================
 
     def phase_move_to_start(self):
         print("\n" + "=" * 60)
-        print("  PHASE 3: MOVE TO START POSE")
+        print("  PHASE 3b: MOVE TO START POSE (flange DOWN)")
         print("=" * 60)
 
         q0 = self.positions[0]
         q0_deg = np.rad2deg(q0)
-        current_deg = np.rad2deg(self.robot.joint_angles())
+        current_deg = np.rad2deg(self._arm.joint_angles())
 
         print(f"  Current (deg): {np.round(current_deg, 1).tolist()}")
         print(f"  Target  (deg): {np.round(q0_deg, 1).tolist()}")
 
         input("  Press ENTER to move to start pose (Ctrl+C to abort)...")
 
-        # Switch to joint trajectory controller WITHOUT zeroing F/T sensor.
-        # deactivate_compliance() is NOT used here because it internally calls
-        # zero_ft_sensor(), which would destroy the zero point set at driver
-        # startup (object-free). The regressor includes gravity via proper
-        # acceleration, so the sensor must measure the full payload wrench.
-        self.robot._arm.activate_joint_trajectory_controller()
-        self.robot.move_to_joints(q0, duration=5.0)
+        self._arm.activate_joint_trajectory_controller()
+        self._arm.set_joint_positions(target_time=5.0, positions=q0, wait=True)
         rospy.sleep(1.0)
 
         # Verify
-        actual_deg = np.rad2deg(self.robot.joint_angles())
+        actual_deg = np.rad2deg(self._arm.joint_angles())
         error_deg = np.abs(actual_deg - q0_deg)
         print(f"  Arrived (deg): {np.round(actual_deg, 1).tolist()}")
         print(f"  Error   (deg): {np.round(error_deg, 2).tolist()}")
@@ -267,7 +320,46 @@ class ExcitationTrajectoryReplayNode:
         if np.max(error_deg) > 2.0:
             rospy.logwarn(f"Position error exceeds 2 deg: {np.max(error_deg):.2f}")
 
+        # Show wrench at start pose.
+        # Flange DOWN: tool0 Z points down, gravity pulls payload down → Fz ≈ +mg
+        self._print_wrench("Wrench at start pose (flange DOWN, expect Fz ~ +mg):")
+
         print("  Ready for trajectory replay.")
+
+    # =========================================================================
+    # F/T sensor helpers
+    # =========================================================================
+
+    def _zero_ftsensor(self):
+        """Call zero_ftsensor service."""
+        service_name = "/ur_hardware_interface/zero_ftsensor"
+        print(f"  Calling {service_name}...")
+        try:
+            rospy.wait_for_service(service_name, timeout=5.0)
+            zero_ft = rospy.ServiceProxy(service_name, Trigger)
+            resp = zero_ft()
+            if resp.success:
+                print("  F/T sensor zeroed successfully.")
+            else:
+                rospy.logwarn(f"  zero_ftsensor returned: {resp.message}")
+        except rospy.ROSException as e:
+            rospy.logerr(f"  zero_ftsensor service not available: {e}")
+
+        rospy.sleep(0.5)
+
+    def _print_wrench(self, label: str):
+        """Read and display current wrench."""
+        try:
+            wrench_msg = rospy.wait_for_message(self.wrench_topic, WrenchStamped, timeout=2.0)
+            f = wrench_msg.wrench.force
+            t = wrench_msg.wrench.torque
+            print()
+            print(f"  {label}")
+            print(f"    Fx: {f.x:>10.4f} N    Fy: {f.y:>10.4f} N    Fz: {f.z:>10.4f} N")
+            print(f"    Tx: {t.x:>10.4f} Nm   Ty: {t.y:>10.4f} Nm   Tz: {t.z:>10.4f} Nm")
+            print()
+        except rospy.ROSException as e:
+            rospy.logerr(f"  Failed to read wrench: {e}")
 
     # =========================================================================
     # Phase 4: Replay trajectory and record data
@@ -285,11 +377,10 @@ class ExcitationTrajectoryReplayNode:
         self.is_recording = True
 
         # Execute trajectory via CompliantController directly
-        arm: CompliantController = self.robot._arm
-        arm.activate_joint_trajectory_controller()
+        self._arm.activate_joint_trajectory_controller()
 
         print(f"  Executing trajectory ({self.duration:.1f}s)...")
-        arm.set_joint_trajectory(
+        self._arm.set_joint_trajectory(
             target_time=self.duration,
             trajectory=self.positions,
             velocities=self.velocities,
@@ -549,6 +640,9 @@ class ExcitationTrajectoryReplayNode:
     # =========================================================================
 
     def phase_resync_leader(self):
+        if self.skip_teleop:
+            return
+
         print("\n" + "=" * 60)
         print("  PHASE 6: RE-SYNC LEADER")
         print("=" * 60)
@@ -571,13 +665,17 @@ class ExcitationTrajectoryReplayNode:
         print("  EXCITATION TRAJECTORY REPLAY")
         print("=" * 60)
 
-        # Phase 1: Teleop grasp
-        self.phase_teleop_grasp()
+        if not self.skip_teleop:
+            # Phase 1: Teleop grasp
+            self.phase_teleop_grasp()
 
-        # Phase 2: Close gripper
-        self.phase_close_gripper()
+            # Phase 2: Close gripper
+            self.phase_close_gripper()
+        else:
+            # Phase 3a: Mount payload (flange up, zero F/T, attach gripper)
+            self.phase_mount_payload()
 
-        # Phase 3: Move to start pose
+        # Phase 3b: Move to start pose (flange down)
         self.phase_move_to_start()
 
         # Phase 4: Replay and record

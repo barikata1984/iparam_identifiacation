@@ -15,6 +15,7 @@
 
         Usage:
             roslaunch iparam_identification replay_excitation_trajectory.launch
+            roslaunch iparam_identification replay_excitation_trajectory.launch skip_teleop:=true
             roslaunch iparam_identification replay_excitation_trajectory.launch leader_port:=/dev/ttyUSB1
     -->
 
@@ -24,16 +25,18 @@
     <arg name="cutoff_freq" default="10.0"/>
     <arg name="trim_start" default="1.0"/>
     <arg name="trim_end" default="4.0"/>
+    <arg name="skip_teleop" default="false" doc="Skip teleop/gripper phases (for bare flange runs)"/>
     <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
     <arg name="teleop_config" default="$(find osx_bilateral)/configs/teleop.yaml"/>
 
-    <!-- ========== Teleop Infrastructure ========== -->
+    <!-- ========== Teleop Infrastructure (skipped when skip_teleop:=true) ========== -->
 
     <!-- Dynamixel motor controller (leader arm) -->
     <node pkg="dynamixel_sdk_examples"
           type="sync_read_write_current_node"
           name="sync_current_control_node"
-          output="screen">
+          output="screen"
+          unless="$(arg skip_teleop)">
         <param name="device_name" value="$(arg leader_port)"/>
     </node>
 
@@ -41,7 +44,8 @@
     <node pkg="osx_bilateral"
           type="haptic_feedback_publisher.py"
           name="haptic_feedback_publisher"
-          output="screen">
+          output="screen"
+          unless="$(arg skip_teleop)">
         <param name="config_path" value="$(arg teleop_config)"/>
     </node>
 
@@ -57,5 +61,6 @@
         <param name="cutoff_freq" value="$(arg cutoff_freq)"/>
         <param name="trim_start" value="$(arg trim_start)"/>
         <param name="trim_end" value="$(arg trim_end)"/>
+        <param name="skip_teleop" value="$(arg skip_teleop)"/>
     </node>
 </launch>
