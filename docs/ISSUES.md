@@ -86,6 +86,10 @@ UR ROS ドライバの `/wrench` トピックは RTDE 変数 `actual_TCP_force` 
 - bare→loaded 差分計測 3 回: Fz diff = -8.79, -10.66, -8.97 N（秤実測 mg = 9.38 N）
 - ドリフトは差分計測の bare/loaded 間の時間差にも影響し、差分値自体を汚染する
 
+**UR フォーラム情報** (https://forum.universal-robots.com/t/drift-in-the-ur3e-f-t-sensor/41493):
+- F/T センサ（Robotiq 製）は連続測定精度ではなく、定期的な `zero_ftsensor()` を前提に設計
+- ドリフトの一貫性は保証されていない（仕様）
+
 **対応**: 暖機時間の特定、または計測直前のプリロード取得を運用ルールとする。
 
 ---
