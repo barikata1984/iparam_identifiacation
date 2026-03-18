@@ -339,7 +339,33 @@ Fz 以外の軸（Fx, Fy）は差分が小さすぎて検証不十分。
 2. ft_raw_wrench + 軌道直前のプリロード計測で差し引く
 3. 励起軌道を短く保ち（5 秒）、ドリフトの影響を最小化
 
+### 外付け F/T センサの調査
+
+UR 内蔵 F/T センサの精度限界（±3.5 N precision、定期的 zero_ftsensor 前提の設計）を踏まえ、
+外付けセンサの選択肢を調査。
+
+| | UR 内蔵 | ATI 等外付け |
+|---|---------|------------|
+| 力精度 | ±4 N | ±0.1〜0.5 N |
+| 力 precision | ±3.5 N | 桁違いに高い |
+| ドリフト | 大（±5 N 短期揺らぎ確認済み） | 温度補償あり、桁違いに小さい |
+| 設計思想 | 定期的 zero_ftsensor 前提 | 連続計測精度 |
+
+主な UR5e 対応製品:
+- **ATI Axia80**: URCap プラグインで UR コントローラに直接統合。慣性パラメータ同定論文で最多使用
+- **ATI Mini45 / Gamma**: 研究用途で広く使用。シリコンストレインゲージで高分解能・高剛性
+- **Bota Systems SensONE**: UR CB/E-Series 向けプラグ＆プレイキット
+
+120g 物体の同定には mg ≈ 1.2 N の信号検出が必要。内蔵センサの precision ±3.5 N では原理的に困難。
+外付けセンサによりドリフト・ゼロ化問題を大幅に軽減可能。
+
+参考:
+- https://www.ati-ia.com/products/ft/sensors.aspx
+- https://www.universal-robots.com/blog/universal-robots-with-ati-s-ft-sensors-just-feels-right/
+- https://www.botasys.com/robot-accessories/collaborative-robot-ft-sensor-kit
+
 ### 次のステップ
 
 - I-9 の特性評価（揺らぎの時間スケール・分布の把握）
 - ft_raw_wrench ベースの同定への移行（Step 5d）: プリロードを軌道直前に計測し差し引く方式
+- 外付け F/T センサの導入検討（精度要件に応じて）
