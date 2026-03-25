@@ -3,12 +3,13 @@
         Excitation Trajectory Replay with Inertial Parameter Identification
 
         Workflow:
-        1. Free teleoperation to grasp object (via Dynamixel leader arm)
-        2. Close gripper
-        3. Move to excitation trajectory start pose
-        4. Replay trajectory with data recording
-        5. Identify inertial parameters (trim window)
-        6. Re-sync leader arm
+        teleop mode (default):
+          1. Move to home → zero_ftsensor (bare flange+gripper) → teleop grasp
+          2. Close gripper
+          3. Move to start pose → replay → identify → re-sync leader
+
+        skip_teleop mode:
+          3. Move to start pose → zero_ftsensor (bare flange) → replay → identify → re-sync leader
 
         Prerequisites (must be running separately):
         - UR driver: roslaunch osx_ur5e connect_real_robot.launch
@@ -23,9 +24,9 @@
     <arg name="trajectory" default="$(find iparam_identification)/data/trajectories/excitation_trajectory.json"/>
     <arg name="wrench_topic" default="/wrench"/>
     <arg name="cutoff_freq" default="10.0"/>
-    <arg name="trim_start" default="1.0"/>
-    <arg name="trim_end" default="4.0"/>
-    <arg name="skip_teleop" default="false" doc="Skip teleop/gripper phases (for bare flange runs)"/>
+    <arg name="trim_start" default="0.0"/>
+    <arg name="trim_end" default="inf"/>
+    <arg name="skip_teleop" default="false" doc="Skip teleop/gripper phases; zero F/T at start pose (for gripper-only identification)"/>
     <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
     <arg name="teleop_config" default="$(find osx_bilateral)/configs/teleop.yaml"/>
 

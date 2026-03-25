@@ -2,13 +2,15 @@
 """
 Replay excitation trajectory on real UR5e robot and identify inertial parameters.
 
-Workflow:
-    1. Free teleoperation to grasp object
-    2. Close Robotiq gripper fully
-    3. Move to excitation trajectory's initial joint pose
-    4. Execute trajectory replay with synchronized data recording
-    5. Identify inertial parameters from trimmed time window (default 1s-4s)
-    6. Publish parameters and re-sync leader arm
+Workflow (teleop mode):
+    1. Move to home → zero_ftsensor (bare flange+gripper) → teleop grasp object
+    2. Close Robotiq gripper
+    3. Move to start pose
+    4-6. Replay → identify → re-sync leader
+
+Workflow (skip_teleop mode):
+    3. Move to start pose → zero_ftsensor (bare flange)
+    4-6. Replay → identify → re-sync leader
 
 Prerequisites:
     - Robot driver running (ur_robot_driver)
@@ -52,6 +54,7 @@ from utilities.tool0_kinematics import (  # noqa: E402
     Tool0KinematicsCalculator,
     reorder_joint_state,
 )
+from identifiers.tls import solve_tls_weighted  # noqa: E402
 from utilities.identification_utils import PARAM_NAMES, plot_kinematics_wrench  # noqa: E402
 from utilities.wrist_end_kinematics_utils import get_regressor_matrix  # noqa: E402
 
@@ -59,12 +62,6 @@ matplotlib.use("Agg")
 
 # Default trajectory path
 DEFAULT_TRAJECTORY = str(IPARAM_ROOT / "data" / "trajectories" / "excitation_trajectory.json")
-
-
-# Mounting pose: flange pointing UP for easy gripper attachment.
-# Same as excitation home [90, -90, 90, -90, -90, 0] deg but with J4 flipped: -90 -> +90.
-MOUNTING_POSE_DEG = [90.0, -90.0, 90.0, 90.0, -90.0, 0.0]
-MOUNTING_POSE_RAD = np.deg2rad(MOUNTING_POSE_DEG)
 
 
 class ExcitationTrajectoryReplayNode:
@@ -76,8 +73,8 @@ class ExcitationTrajectoryReplayNode:
         # --- ROS parameters ---
         trajectory_path = rospy.get_param("~trajectory_path", DEFAULT_TRAJECTORY)
         self.wrench_topic = rospy.get_param("~wrench_topic", "/wrench")
-        self.trim_start = rospy.get_param("~trim_start", 1.0)
-        self.trim_end = rospy.get_param("~trim_end", 4.0)
+        self.trim_start = float(rospy.get_param("~trim_start", 0.0))
+        self.trim_end = float(rospy.get_param("~trim_end", "inf"))
 
         # --- Load trajectory ---
         with open(trajectory_path) as f:
@@ -104,6 +101,7 @@ class ExcitationTrajectoryReplayNode:
         if self.skip_teleop:
             # Direct robot control without teleop/gripper (e.g. bare flange runs)
             self._arm = CompliantController(gripper_type=None)
+            self._arm.dashboard_services.activate_ros_control_on_ur()
             self.controller = None
             self.robot = None
             rospy.loginfo("Skip-teleop mode: no gripper, no leader arm.")
@@ -207,10 +205,14 @@ class ExcitationTrajectoryReplayNode:
         # Step 1: Move to home position (same as teleop.py)
         self.controller.move_to_home(wait_for_input=True)
 
-        # Step 2: Sync leader arm with robot
+        # Step 2: Zero F/T sensor (bare flange + gripper, before grasping object)
+        self._zero_ftsensor()
+        self._print_wrench("Wrench after zero_ftsensor (should be ~0):")
+
+        # Step 3: Sync leader arm with robot
         self.controller.sync_with_leader()
 
-        # Step 3: Free teleoperation for grasping
+        # Step 4: Free teleoperation for grasping
         print()
         print("  >>> TELEOP ACTIVE <<<")
         print("  Grasp the object, then press ENTER to proceed.")
@@ -248,53 +250,12 @@ class ExcitationTrajectoryReplayNode:
         print("  Gripper fully closed.")
 
     # =========================================================================
-    # Phase 3a: Move to mounting pose (flange up) and zero F/T sensor
-    # =========================================================================
-
-    def phase_mount_payload(self):
-        print("\n" + "=" * 60)
-        print("  PHASE 3a: MOUNTING POSE (flange UP)")
-        print("=" * 60)
-
-        current_deg = np.rad2deg(self._arm.joint_angles())
-        print(f"  Current (deg): {np.round(current_deg, 1).tolist()}")
-        print(f"  Target  (deg): {list(MOUNTING_POSE_DEG)}")
-
-        input("  Press ENTER to move to mounting pose (Ctrl+C to abort)...")
-
-        self._arm.activate_joint_trajectory_controller()
-        self._arm.set_joint_positions(target_time=5.0, positions=MOUNTING_POSE_RAD, wait=True)
-        rospy.sleep(1.0)
-
-        # Verify arrival
-        actual_deg = np.rad2deg(self._arm.joint_angles())
-        error_deg = np.abs(actual_deg - np.array(MOUNTING_POSE_DEG))
-        print(f"  Arrived (deg): {np.round(actual_deg, 1).tolist()}")
-        print(f"  Error   (deg): {np.round(error_deg, 2).tolist()}")
-
-        if np.max(error_deg) > 2.0:
-            rospy.logwarn(f"Position error exceeds 2 deg: {np.max(error_deg):.2f}")
-
-        # Zero F/T sensor (bare flange, flange up)
-        self._zero_ftsensor()
-        self._print_wrench("Wrench after zero_ftsensor (should be ~0):")
-
-        # Wait for user to attach payload
-        print()
-        print("  >>> ATTACH GRIPPER / PAYLOAD NOW <<<")
-        input("  Press ENTER after attachment is complete...")
-
-        # Show wrench with payload attached.
-        # Flange UP: tool0 Z points up, gravity pulls payload down → Fz ≈ -mg
-        self._print_wrench("Wrench with payload (flange UP, expect Fz ~ -mg):")
-
-    # =========================================================================
-    # Phase 3b: Move to trajectory start pose (flange down)
+    # Phase 3: Move to trajectory start pose (flange down)
     # =========================================================================
 
     def phase_move_to_start(self):
         print("\n" + "=" * 60)
-        print("  PHASE 3b: MOVE TO START POSE (flange DOWN)")
+        print("  PHASE 3: MOVE TO START POSE (flange DOWN)")
         print("=" * 60)
 
         q0 = self.positions[0]
@@ -318,6 +279,11 @@ class ExcitationTrajectoryReplayNode:
 
         if np.max(error_deg) > 2.0:
             rospy.logwarn(f"Position error exceeds 2 deg: {np.max(error_deg):.2f}")
+
+        # Zero F/T sensor in skip_teleop mode (bare flange at start pose)
+        if self.skip_teleop:
+            self._zero_ftsensor()
+            self._print_wrench("Wrench after zero_ftsensor (should be ~0):")
 
         # Show wrench at start pose.
         # Flange DOWN: tool0 Z points down, gravity pulls payload down → Fz ≈ +mg
@@ -448,67 +414,97 @@ class ExcitationTrajectoryReplayNode:
         N = len(trimmed_frames)
         print(f"  S matrix: {S_total.shape}, W vector: {W_total.shape}")
 
-        # Augment regressor with constant bias columns to absorb tool weight offset.
-        # The F/T sensor was zeroed at home pose (without object), so measurements
-        # include a constant bias from tool weight at a different orientation:
-        #   F_measured = S*phi + bias
-        # where bias = m_tool * [g_local(q) - g_local(q_home)] is approximately
-        # constant over the trajectory. Adding 6 bias columns lets OLS absorb it.
+        # Augment regressor with constant bias columns to absorb F/T sensor offset.
+        # Following Kubus et al. (2007) Approach 2: [A | I_6] @ [phi; b] = W
         bias_block = np.tile(np.eye(6), (N, 1))  # (6*N, 6)
         S_aug = np.hstack([S_total, bias_block])  # (6*N, 16)
 
-        # OLS without bias (original)
+        # --- Solve with 4 methods ---
+        results = {}
+
+        # OLS
         print("  Solving OLS...")
         try:
-            pi_ols_raw, _, rank_raw, _ = np.linalg.lstsq(S_total, W_total, rcond=None)
+            pi, _, rank, _ = np.linalg.lstsq(S_total, W_total, rcond=None)
+            results["OLS"] = pi
         except Exception as e:
             print(f"  OLS failed: {e}")
-            pi_ols_raw = np.zeros(10)
-            rank_raw = 0
+            results["OLS"] = np.zeros(10)
 
-        # OLS with bias estimation
+        # TLS (COLUMN_ONLY scaling)
+        print("  Solving TLS...")
+        try:
+            tls_result = solve_tls_weighted(S_total, W_total)
+            results["TLS"] = tls_result.x
+        except Exception as e:
+            print(f"  TLS failed: {e}")
+            results["TLS"] = np.zeros(10)
+
+        # OLS+bias
         print("  Solving OLS+bias...")
         try:
-            pi_aug, _, rank, _ = np.linalg.lstsq(S_aug, W_total, rcond=None)
-            pi_ols = pi_aug[:10]  # inertial parameters
-            bias_est = pi_aug[10:]  # estimated wrench bias [Fx, Fy, Fz, Tx, Ty, Tz]
+            pi_aug, _, rank_aug, _ = np.linalg.lstsq(S_aug, W_total, rcond=None)
+            results["OLS+bias"] = pi_aug[:10]
+            bias_ols = pi_aug[10:]
         except Exception as e:
             print(f"  OLS+bias failed: {e}")
-            pi_ols = pi_ols_raw
-            bias_est = np.zeros(6)
-            rank = rank_raw
+            results["OLS+bias"] = np.zeros(10)
+            bias_ols = np.zeros(6)
 
-        # Display results
+        # TLS+bias
+        print("  Solving TLS+bias...")
+        try:
+            tls_bias_result = solve_tls_weighted(S_aug, W_total)
+            results["TLS+bias"] = tls_bias_result.x[:10]
+            bias_tls = tls_bias_result.x[10:]
+        except Exception as e:
+            print(f"  TLS+bias failed: {e}")
+            results["TLS+bias"] = np.zeros(10)
+            bias_tls = np.zeros(6)
+
+        # --- Display results ---
+        methods = ["OLS", "TLS", "OLS+bias", "TLS+bias"]
         print()
-        print("=" * 60)
+        print("=" * 76)
         print("  INERTIA PARAMETER ESTIMATION RESULTS")
-        print("=" * 60)
+        print("=" * 76)
         print(f"  Data range: [{self.trim_start}s, {self.trim_end}s]")
-        print(f"  Frames used: {N}, Rank: {rank}")
+        print(f"  Frames used: {N}")
         print()
-        print(f"  {'Param':10s} {'OLS+bias':>15s} {'OLS(raw)':>15s}")
-        print("  " + "-" * 42)
+        header = f"  {'param':10s}" + "".join(f" {m:>14s}" for m in methods)
+        print(header)
+        print("  " + "-" * (10 + 15 * len(methods)))
         for i, name in enumerate(PARAM_NAMES):
-            print(f"  {name:10s} {pi_ols[i]:>15.6f} {pi_ols_raw[i]:>15.6f}")
+            row = f"  {name:10s}"
+            for m in methods:
+                row += f" {results[m][i]:>14.6f}"
+            print(row)
         print()
+
         bias_labels = ["Fx", "Fy", "Fz", "Tx", "Ty", "Tz"]
-        print("  Estimated wrench bias (tool weight offset):")
+        print(f"  {'bias':10s} {'OLS+bias':>14s} {'TLS+bias':>14s}")
+        print("  " + "-" * 40)
         for i, label in enumerate(bias_labels):
-            print(f"    {label}: {bias_est[i]:>10.4f} {'N' if i < 3 else 'Nm'}")
-        print("=" * 60)
+            unit = "N" if i < 3 else "Nm"
+            print(f"  {label:10s} {bias_ols[i]:>13.4f}{unit} {bias_tls[i]:>13.4f}{unit}")
+        print("=" * 76)
 
         # Save results
         results_dir = self._save_results(
-            all_frames, trimmed_frames, pi_ols, pi_ols_raw, rank, bias_est
+            all_frames,
+            trimmed_frames,
+            results,
+            bias_ols,
+            bias_tls,
         )
         print(f"  Results saved to: {results_dir}")
 
-        # Prompt to accept
+        # Prompt to accept (publish OLS+bias as default)
         while True:
-            response = input("\n  Accept and publish? (y/n) > ").strip().lower()
+            response = input("\n  Accept and publish OLS+bias? (y/n) > ").strip().lower()
             if response in ("y", "yes"):
-                self._publish_inertia_params(pi_ols)
-                print("  Inertia parameters published.")
+                self._publish_inertia_params(results["OLS+bias"])
+                print("  Inertia parameters published (OLS+bias).")
                 return True
             elif response in ("n", "no"):
                 print("  Results not published.")
@@ -520,10 +516,9 @@ class ExcitationTrajectoryReplayNode:
         self,
         all_frames: list[dict],
         trimmed_frames: list[dict],
-        pi_ols: np.ndarray,
-        pi_ols_raw: np.ndarray,
-        rank: int,
-        bias_est: np.ndarray = None,
+        results: dict[str, np.ndarray],
+        bias_ols: np.ndarray,
+        bias_tls: np.ndarray,
     ) -> str:
         import rospkg
 
@@ -543,12 +538,11 @@ class ExcitationTrajectoryReplayNode:
                 "trimmed_frames": len(trimmed_frames),
                 "trim_start": self.trim_start,
                 "trim_end": self.trim_end,
-                "rank": int(rank),
             },
-            "results": {
-                "ols": {"params": pi_ols.tolist()},
-                "ols_raw": {"params": pi_ols_raw.tolist()},
-                "wrench_bias": {"params": bias_est.tolist() if bias_est is not None else []},
+            "results": {method: {"params": params.tolist()} for method, params in results.items()},
+            "bias": {
+                "ols": bias_ols.tolist(),
+                "tls": bias_tls.tolist(),
             },
             "frames": trimmed_frames,
         }
@@ -605,11 +599,8 @@ class ExcitationTrajectoryReplayNode:
 
             # Phase 2: Close gripper
             self.phase_close_gripper()
-        else:
-            # Phase 3a: Mount payload (flange up, zero F/T, attach gripper)
-            self.phase_mount_payload()
 
-        # Phase 3b: Move to start pose (flange down)
+        # Phase 3: Move to start pose (flange down)
         self.phase_move_to_start()
 
         # Phase 4: Replay and record
