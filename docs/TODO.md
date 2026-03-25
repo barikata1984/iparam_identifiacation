@@ -1,6 +1,6 @@
 # TODO — マイクロタスク
 
-> **最終更新**: 2026-03-17
+> **最終更新**: 2026-03-24
 
 ---
 
@@ -26,7 +26,8 @@
   - m ≈ 0.012 kg (OLS+bias), -0.006 kg (OLS raw) — 期待通りゼロ近辺
 - [ ] Step 6: グリッパキャリブレーション（物体なしで励起軌道実行 → φ_gripper 推定）
   - グリッパ付き実機計測を 2 回実施（actual_TCP_force 起動時ゼロ化問題で推定精度不十分）
-  - skip_teleop モードにマウント姿勢フロー追加済み（zero_ftsensor → グリッパ装着 → ホーム移動）
+  - skip_teleop モードを簡素化済み（Phase 3a マウント姿勢フロー削除、開始姿勢で zero_ftsensor）
+  - 推定手法を 4 並列化済み（OLS, TLS, OLS+bias, TLS+bias）
 - [ ] Step 7: 物体同定（差分法: φ_object = φ_total - φ_gripper）
 - [ ] Step 8: 120g 物体に対して正常な推定値を確認
 

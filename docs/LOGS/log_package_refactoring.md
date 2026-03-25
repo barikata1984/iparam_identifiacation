@@ -124,3 +124,35 @@ tests/  (5本)
   test_regressor_consistency.py
   ros_test_stationary_kinematics.py  ← [移動]
 ```
+
+## 2026-03-24: ワークフロー改善
+
+### replay_excitation_trajectory.py のフェーズ再設計
+
+- **Phase 3a（マウント姿勢フロー）を削除**: フランジ上向きへの移動 → zero_ftsensor → ペイロード手動装着の工程を廃止
+- **zero_ftsensor のタイミングを整理**:
+  - teleop モード: Phase 1 のホーム移動直後（ベアフランジ+グリッパでゼロ化、物体把持前）
+  - skip_teleop モード: Phase 3 の開始姿勢到着後（ベアフランジでゼロ化）
+- `MOUNTING_POSE_DEG/RAD` 定数を削除
+
+### skip_teleop モードで `activate_ros_control_on_ur()` を追加
+
+- skip_teleop モードでは `RobotInterface` を経由せず `CompliantController` を直接生成していたため、UR の External Control プログラムが起動されなかった
+- `self._arm.dashboard_services.activate_ros_control_on_ur()` を追加して修正
+
+### 推定手法の 4 並列化
+
+- 従来: OLS と OLS+bias の 2 手法のみ
+- 変更後: OLS, TLS, OLS+bias, TLS+bias の 4 手法を並列実行・比較表示
+- Kubus et al. (2007) の Approach 2（`[A | I₆]` 拡張リグレッサ）が OLS/TLS 両方に適用可能であることを確認
+- 結果 JSON にも 4 手法分を保存
+
+### トリムウィンドウのデフォルト変更
+
+- 従来: `trim_start=1.0, trim_end=4.0`（両端 1 秒を除外）
+- 変更後: `trim_start=0.0, trim_end=inf`（全フレーム使用）
+
+### その他
+
+- `preview_optimized_trajectory.py` と `optimized_trajectory_box_two_stage.json` を削除（利用予定なし）
+- `data/trajectories/chair/` を削除（無関係データ）
