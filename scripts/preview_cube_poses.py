@@ -28,15 +28,7 @@ sys.path.insert(0, str(IPARAM_ROOT / "src"))
 
 from calibration.cube_poses import compute_cube_poses  # noqa: E402
 from calibration.septic_spline import septic_position, septic_velocity  # noqa: E402
-
-UR5E_JOINT_NAMES = [
-    "shoulder_pan_joint",
-    "shoulder_lift_joint",
-    "elbow_joint",
-    "wrist_1_joint",
-    "wrist_2_joint",
-    "wrist_3_joint",
-]
+from utilities.tool0_kinematics import JOINT_ORDER  # noqa: E402
 
 # Dummy ft_raw_wrench preload values (typical for UR5e with tool)
 _FT_PRELOAD_MEAN = np.array([24800.0, -20.0, 40.0, -0.1, 0.1, -0.05])
@@ -77,7 +69,7 @@ class CubePosePreviewNode:
     ) -> None:
         msg = JointState()
         msg.header.stamp = rospy.Time.now()
-        msg.name = UR5E_JOINT_NAMES
+        msg.name = list(JOINT_ORDER)
         msg.position = position.tolist()
         msg.velocity = (velocity if velocity is not None else np.zeros(6)).tolist()
         msg.effort = [0.0] * 6

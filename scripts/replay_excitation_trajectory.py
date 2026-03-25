@@ -52,15 +52,14 @@ from utilities.tool0_kinematics import (  # noqa: E402
     Tool0KinematicsCalculator,
     reorder_joint_state,
 )
+from utilities.identification_utils import PARAM_NAMES, plot_kinematics_wrench  # noqa: E402
 from utilities.wrist_end_kinematics_utils import get_regressor_matrix  # noqa: E402
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 
 # Default trajectory path
 DEFAULT_TRAJECTORY = str(IPARAM_ROOT / "data" / "trajectories" / "excitation_trajectory.json")
 
-PARAM_NAMES = ["m", "mcx", "mcy", "mcz", "Ixx", "Iyy", "Izz", "Ixy", "Iyz", "Izx"]
 
 # Mounting pose: flange pointing UP for easy gripper attachment.
 # Same as excitation home [90, -90, 90, -90, -90, 0] deg but with J4 flipped: -90 -> +90.
@@ -559,74 +558,9 @@ class ExcitationTrajectoryReplayNode:
             json.dump(output_data, f, indent=2)
 
         # Save plots
-        self._save_plots(trimmed_frames, results_dir)
+        plot_kinematics_wrench(trimmed_frames, results_dir)
 
         return results_dir
-
-    def _save_plots(self, frames: list[dict], save_dir: str):
-        times = [f["time"] for f in frames]
-        wrench = np.array([f["wrench"] for f in frames])
-        lv = np.array([f["tool0_kinematics"]["lv"] for f in frames])
-        av = np.array([f["tool0_kinematics"]["av"] for f in frames])
-        la = np.array([f["tool0_kinematics"]["la"] for f in frames])
-        aa = np.array([f["tool0_kinematics"]["aa"] for f in frames])
-
-        # Velocity plot
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-        for i, label in enumerate(["x", "y", "z"]):
-            ax1.plot(times, lv[:, i], label=label)
-            ax2.plot(times, av[:, i], label=label)
-        ax1.set_title("Linear Velocity (lv)")
-        ax1.set_ylabel("[m/s]")
-        ax1.legend()
-        ax1.grid(True)
-        ax2.set_title("Angular Velocity (av)")
-        ax2.set_ylabel("[rad/s]")
-        ax2.set_xlabel("Time [s]")
-        ax2.legend()
-        ax2.grid(True)
-        plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "velocity.png"))
-        plt.close()
-
-        # Acceleration plot
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-        for i, label in enumerate(["x", "y", "z"]):
-            ax1.plot(times, la[:, i], label=label)
-            ax2.plot(times, aa[:, i], label=label)
-        ax1.set_title("Linear Acceleration (la)")
-        ax1.set_ylabel("[m/s^2]")
-        ax1.legend()
-        ax1.grid(True)
-        ax2.set_title("Angular Acceleration (aa)")
-        ax2.set_ylabel("[rad/s^2]")
-        ax2.set_xlabel("Time [s]")
-        ax2.legend()
-        ax2.grid(True)
-        plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "acceleration.png"))
-        plt.close()
-
-        # Wrench plot
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-        for i, label in enumerate(["Fx", "Fy", "Fz"]):
-            ax1.plot(times, wrench[:, i], label=label)
-        for i, label in enumerate(["Tx", "Ty", "Tz"]):
-            ax2.plot(times, wrench[:, 3 + i], label=label)
-        ax1.set_title("Force")
-        ax1.set_ylabel("[N]")
-        ax1.legend()
-        ax1.grid(True)
-        ax2.set_title("Torque")
-        ax2.set_ylabel("[Nm]")
-        ax2.set_xlabel("Time [s]")
-        ax2.legend()
-        ax2.grid(True)
-        plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "wrench.png"))
-        plt.close()
-
-        rospy.loginfo("Plots saved.")
 
     def _publish_inertia_params(self, params: np.ndarray):
         msg = Float64MultiArray()

@@ -26,12 +26,6 @@ def _dh(s: np.ndarray | float) -> np.ndarray | float:
     return 140.0 * s3 - 420.0 * s3 * s + 420.0 * s3 * s2 - 140.0 * s3 * s3
 
 
-def _ddh(s: np.ndarray | float) -> np.ndarray | float:
-    """Second derivative of h w.r.t. s: d²h/ds²."""
-    s2 = s * s
-    return 420.0 * s2 - 1680.0 * s2 * s + 2100.0 * s2 * s2 - 840.0 * s2 * s2 * s
-
-
 def septic_position(q0: np.ndarray, q1: np.ndarray, t: float, T: float) -> np.ndarray:
     """Interpolated joint position at time t in [0, T].
 
@@ -62,19 +56,3 @@ def septic_velocity(q0: np.ndarray, q1: np.ndarray, t: float, T: float) -> np.nd
     """
     s = np.clip(t / T, 0.0, 1.0)
     return (q1 - q0) * _dh(s) / T
-
-
-def septic_acceleration(q0: np.ndarray, q1: np.ndarray, t: float, T: float) -> np.ndarray:
-    """Interpolated joint acceleration at time t in [0, T].
-
-    Args:
-        q0: Start joint angles (6,).
-        q1: End joint angles (6,).
-        t: Current time [s].
-        T: Total segment duration [s].
-
-    Returns:
-        Joint accelerations (6,).
-    """
-    s = np.clip(t / T, 0.0, 1.0)
-    return (q1 - q0) * _ddh(s) / (T * T)
