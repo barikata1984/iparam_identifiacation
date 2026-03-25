@@ -24,10 +24,10 @@
 
 検証方法:
 - Newton-Euler 手導出との比較
-- `dynamics_utils.py` (Lynch & Park "bullet" 演算子ベース) の正しいリグレッサとの比較
+- `dynamics_utils.py` (Lynch & Park "bullet" 演算子ベース、現在は削除済み) の正しいリグレッサとの比較
 - テストケース omega=[1,0,0], alpha=[0,0,0] で -1 が Izx (col 9) にあるべきところ Iyz (col 8) に出現
 
-`dynamics_utils.py` に正しい実装が存在するが、`tool0_kinematics_node.py` は `wrist_end_kinematics_utils.py` (バグ版) を使用している。
+バグは `wrist_end_kinematics_utils.py` で修正済み（`0671248`）。`dynamics_utils.py` は 2026-03-24 のリファクタで削除。
 
 ### 発見3: TLS スケーリング（既知, 軽微）
 

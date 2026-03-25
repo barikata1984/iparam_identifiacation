@@ -1,12 +1,16 @@
 # UR5e Analytical Kinematics Implementation Notes
 
+> **注意 (2026-03-24)**: このドキュメントが参照する `src/utilities/ur5e_analytical_kinematics.py` は
+> Pinocchio ベースの `Tool0KinematicsCalculator` (`src/utilities/tool0_kinematics.py`) への移行に伴い
+> 削除済み。以下は歴史的記録として残す。
+
 This document details the implementation of analytical forward kinematics (position, velocity, and acceleration) for the UR5e robot, used for inertial parameter identification.
 
 ## Overview
 
 To calculate the regressor matrix for inertial parameter identification, precise knowledge of the end-effector's kinematic state (specifically linear/angular velocity and acceleration) is required. Existing libraries like `ur_pykdl` often lack direct support for calculating acceleration. Therefore, we implemented two analytical approaches to compute these values without relying on numerical differentiation or external physics engines.
 
-The implementation is located in: `src/utilities/ur5e_analytical_kinematics.py`
+The implementation was located in: `src/utilities/ur5e_analytical_kinematics.py` (deleted, superseded by Pinocchio)
 
 ## 1. Modified DH Parameters (Standard Method)
 
