@@ -2,6 +2,10 @@
 """
 Replay excitation trajectory on real UR5e robot and identify inertial parameters.
 
+Supports two modes:
+  - standalone (default): Interactive CLI workflow (teleop → replay → identify)
+  - action: ActionServer mode for integration with data_collection
+
 Workflow (teleop mode):
     1. Move to home → zero_ftsensor (bare flange+gripper) → teleop grasp object
     2. Close Robotiq gripper
@@ -17,8 +21,12 @@ Prerequisites:
     - roslaunch iparam_identification replay_excitation_trajectory.launch
 
 Usage:
+    # Standalone (default):
     rosrun iparam_identification replay_excitation_trajectory.py \
         _trajectory_path:=/path/to/excitation_trajectory.json
+
+    # ActionServer mode (for data_collection integration):
+    rosrun iparam_identification replay_excitation_trajectory.py _standalone:=false
 """
 
 import datetime
@@ -38,10 +46,16 @@ sys.path.insert(0, str(IPARAM_ROOT / "src"))
 OSX_BILATERAL_ROOT = Path(__file__).resolve().parent.parent.parent / "osx_bilateral"
 sys.path.insert(0, str(OSX_BILATERAL_ROOT))
 
+import actionlib  # noqa: E402
 import matplotlib  # noqa: E402
 import message_filters  # noqa: E402
 import rospy  # noqa: E402
 from geometry_msgs.msg import WrenchStamped  # noqa: E402
+from iparam_identification.msg import (  # noqa: E402
+    ExcitationAction,
+    ExcitationFeedback,
+    ExcitationResult,
+)
 from sensor_msgs.msg import JointState  # noqa: E402
 from src.core.terminal import check_enter_pressed  # noqa: E402
 from src.teleop.config import TeleopConfig  # noqa: E402
@@ -51,12 +65,11 @@ from std_srvs.srv import Trigger  # noqa: E402
 from ur_control.fzi_cartesian_compliance_controller import CompliantController  # noqa: E402
 from utilities.tool0_kinematics import (  # noqa: E402
     JOINT_ORDER,
-    Tool0KinematicsCalculator,
     reorder_joint_state,
 )
-from identifiers.tls import ScalingMode, solve_tls_weighted  # noqa: E402
+from identifiers.pipeline import IdentificationPipeline, IdentificationResult  # noqa: E402
+from identifiers.tls import ScalingMode  # noqa: E402
 from utilities.identification_utils import PARAM_NAMES, plot_kinematics_wrench  # noqa: E402
-from utilities.wrist_end_kinematics_utils import get_regressor_matrix  # noqa: E402
 
 matplotlib.use("Agg")
 
@@ -66,10 +79,16 @@ DEFAULT_GRIPPER_CAL = str(IPARAM_ROOT / "data" / "calibration" / "gripper.json")
 
 
 class ExcitationTrajectoryReplayNode:
-    """Replay excitation trajectory on real robot and identify inertial parameters."""
+    """Replay excitation trajectory on real robot and identify inertial parameters.
+
+    Supports standalone (interactive CLI) and action server modes.
+    """
 
     def __init__(self):
         rospy.init_node("excitation_trajectory_replay", anonymous=False)
+
+        # --- Mode ---
+        self.standalone = rospy.get_param("~standalone", True)
 
         # --- ROS parameters ---
         trajectory_path = rospy.get_param("~trajectory_path", DEFAULT_TRAJECTORY)
@@ -112,24 +131,28 @@ class ExcitationTrajectoryReplayNode:
         # --- Gripper calibration (for difference method) ---
         gripper_cal_path = rospy.get_param("~gripper_calibration", "")
         self.gripper_cal = None
+        self._gripper_cal_params = None  # (10,) ndarray for Pipeline
         if gripper_cal_path:
             try:
                 with open(gripper_cal_path) as f:
                     self.gripper_cal = json.load(f)
+                # Extract OLS+bias params for pipeline difference method
+                if "methods" in self.gripper_cal and "OLS+bias" in self.gripper_cal["methods"]:
+                    self._gripper_cal_params = np.array(
+                        self.gripper_cal["methods"]["OLS+bias"]["params"]
+                    )
                 rospy.loginfo(f"  Gripper calibration loaded: {gripper_cal_path}")
                 rospy.loginfo("  → Object identification mode: gripper inertia will be subtracted")
             except (FileNotFoundError, json.JSONDecodeError) as e:
                 rospy.logwarn(f"  Failed to load gripper calibration: {e}")
 
         if self.skip_teleop:
-            # Direct robot control without teleop/gripper (e.g. bare flange runs)
             self._arm = CompliantController(gripper_type=None)
             self._arm.dashboard_services.activate_ros_control_on_ur()
             self.controller = None
             self.robot = None
             rospy.loginfo("Skip-teleop mode: no gripper, no leader arm.")
         else:
-            # Full teleop components (for grasping phase)
             self.teleop_components = create_teleop_components(
                 TeleopConfig(), init_ros_node=False, use_cameras=False
             )
@@ -137,17 +160,19 @@ class ExcitationTrajectoryReplayNode:
             self.robot = self.teleop_components.robot
             self._arm = self.robot._arm
 
+        # --- IdentificationPipeline ---
+        cutoff_freq = rospy.get_param("~cutoff_freq", 10.0)
+        gravity_list = rospy.get_param("~gravity", [0.0, 0.0, -9.81])
+        self._pipeline = IdentificationPipeline(
+            tls_scaling=self.tls_scaling,
+            acc_cutoff_freq=cutoff_freq,
+            gravity=np.array(gravity_list),
+        )
+
         # --- Synchronized data recording ---
-        # Kinematics are computed directly in the callback (not via external node)
-        # to guarantee la/regressor/wrench consistency within each frame.
         self.recorded_frames: list[dict] = []
         self.is_recording = False
         self._ur_joint_names = set(JOINT_ORDER)
-
-        cutoff_freq = rospy.get_param("~cutoff_freq", 10.0)
-        gravity_list = rospy.get_param("~gravity", [0.0, 0.0, -9.81])
-        self._kinematics = Tool0KinematicsCalculator(acc_cutoff_freq=cutoff_freq)
-        self._gravity = np.array(gravity_list)
 
         self.sub_joint = message_filters.Subscriber("/joint_states", JointState)
         self.sub_wrench = message_filters.Subscriber(self.wrench_topic, WrenchStamped)
@@ -165,7 +190,17 @@ class ExcitationTrajectoryReplayNode:
         )
         self.identified_pub = rospy.Publisher("~iparams_identified", Bool, queue_size=1, latch=True)
 
-        rospy.loginfo("ExcitationTrajectoryReplayNode initialized.")
+        # --- ActionServer (always created, active only in non-standalone mode) ---
+        self._action_server = actionlib.SimpleActionServer(
+            "~excitation",
+            ExcitationAction,
+            execute_cb=self._action_execute_cb,
+            auto_start=False,
+        )
+
+        rospy.loginfo(
+            f"ExcitationTrajectoryReplayNode initialized (standalone={self.standalone})."
+        )
 
     # =========================================================================
     # Data recording callback
@@ -175,46 +210,32 @@ class ExcitationTrajectoryReplayNode:
         if not self.is_recording:
             return
 
-        # Filter non-UR messages (e.g. Robotiq gripper)
         if not self._ur_joint_names.issubset(joint_msg.name):
             return
 
-        # Reorder joints to Pinocchio model order
         q, v = reorder_joint_state(
             list(joint_msg.name), list(joint_msg.position), list(joint_msg.velocity)
         )
         t = joint_msg.header.stamp.to_sec()
+        wrench = np.array([
+            wrench_msg.wrench.force.x,
+            wrench_msg.wrench.force.y,
+            wrench_msg.wrench.force.z,
+            wrench_msg.wrench.torque.x,
+            wrench_msg.wrench.torque.y,
+            wrench_msg.wrench.torque.z,
+        ])
 
-        # Compute kinematics directly (no external node dependency)
-        result = self._kinematics.compute_with_gravity(q, v, t, self._gravity)
-        la = result["proper_linear_acceleration"]
-        av = result["angular_velocity"]
-        aa = result["angular_acceleration"]
+        # Feed into pipeline (kinematics + regressor computed internally)
+        self._pipeline.process_frame(q, v, t, wrench)
 
-        # Build regressor from the SAME kinematics result (guaranteed consistent)
-        regressor = get_regressor_matrix(linear_acc=la, angular_vel=av, angular_acc=aa)
-
-        frame = {
+        # Also keep raw frame data for saving/plotting
+        self.recorded_frames.append({
             "time": t,
             "joint_position": q.tolist(),
             "joint_velocity": v.tolist(),
-            "tool0_kinematics": {
-                "lv": result["linear_velocity"].tolist(),
-                "av": av.tolist(),
-                "la": la.tolist(),
-                "aa": aa.tolist(),
-            },
-            "regressor": regressor.tolist(),
-            "wrench": [
-                wrench_msg.wrench.force.x,
-                wrench_msg.wrench.force.y,
-                wrench_msg.wrench.force.z,
-                wrench_msg.wrench.torque.x,
-                wrench_msg.wrench.torque.y,
-                wrench_msg.wrench.torque.z,
-            ],
-        }
-        self.recorded_frames.append(frame)
+            "wrench": wrench.tolist(),
+        })
 
     # =========================================================================
     # Phase 1: Teleop grasp
@@ -225,17 +246,13 @@ class ExcitationTrajectoryReplayNode:
         print("  PHASE 1: TELEOP GRASP")
         print("=" * 60)
 
-        # Step 1: Move to home position (same as teleop.py)
         self.controller.move_to_home(wait_for_input=True)
 
-        # Step 2: Zero F/T sensor (bare flange + gripper, before grasping object)
         self._zero_ftsensor()
         self._print_wrench("Wrench after zero_ftsensor (should be ~0):")
 
-        # Step 3: Sync leader arm with robot
         self.controller.sync_with_leader()
 
-        # Step 4: Free teleoperation for grasping
         print()
         print("  >>> TELEOP ACTIVE <<<")
         print("  Grasp the object, then press ENTER to proceed.")
@@ -250,10 +267,6 @@ class ExcitationTrajectoryReplayNode:
             self.controller.step()
             rate.sleep()
 
-        # Deactivate teleop WITHOUT zeroing F/T sensor.
-        # controller.deactivate() is not used because it calls zero_ft_sensor()
-        # twice (directly + via deactivate_compliance), which would destroy the
-        # zero point set at driver startup (object-free).
         if self.controller._teleop_active_pub:
             self.controller._teleop_active_pub.publish(Bool(False))
         self.robot._arm.activate_joint_trajectory_controller()
@@ -294,7 +307,6 @@ class ExcitationTrajectoryReplayNode:
         self._arm.set_joint_positions(target_time=5.0, positions=q0, wait=True)
         rospy.sleep(1.0)
 
-        # Verify
         actual_deg = np.rad2deg(self._arm.joint_angles())
         error_deg = np.abs(actual_deg - q0_deg)
         print(f"  Arrived (deg): {np.round(actual_deg, 1).tolist()}")
@@ -303,13 +315,10 @@ class ExcitationTrajectoryReplayNode:
         if np.max(error_deg) > 2.0:
             rospy.logwarn(f"Position error exceeds 2 deg: {np.max(error_deg):.2f}")
 
-        # Zero F/T sensor in skip_teleop mode (bare flange at start pose)
         if self.skip_teleop:
             self._zero_ftsensor()
             self._print_wrench("Wrench after zero_ftsensor (should be ~0):")
 
-        # Show wrench at start pose.
-        # Flange DOWN: tool0 Z points down, gravity pulls payload down → Fz ≈ +mg
         self._print_wrench("Wrench at start pose (flange DOWN, expect Fz ~ +mg):")
 
         print("  Ready for trajectory replay.")
@@ -353,18 +362,27 @@ class ExcitationTrajectoryReplayNode:
     # Phase 4: Replay trajectory and record data
     # =========================================================================
 
-    def phase_replay_and_record(self) -> list[dict]:
+    def phase_replay_and_record(self, feedback_cb=None) -> int:
+        """Replay trajectory and record data via pipeline.
+
+        Args:
+            feedback_cb: Optional callback(progress, frame_count) for ActionServer feedback.
+
+        Returns:
+            Number of recorded frames.
+        """
         print("\n" + "=" * 60)
         print("  PHASE 4: TRAJECTORY REPLAY + RECORDING")
         print("=" * 60)
 
-        input("  Press ENTER to START trajectory replay (Ctrl+C to abort)...")
+        if feedback_cb is None:
+            input("  Press ENTER to START trajectory replay (Ctrl+C to abort)...")
 
-        # Start recording
+        # Reset pipeline and frame buffer for new recording
+        self._pipeline.reset()
         self.recorded_frames = []
         self.is_recording = True
 
-        # Execute trajectory via CompliantController directly
         self._arm.activate_joint_trajectory_controller()
 
         print(f"  Executing trajectory ({self.duration:.1f}s)...")
@@ -376,122 +394,104 @@ class ExcitationTrajectoryReplayNode:
             wait=False,
         )
 
-        # Monitor progress
         rate = rospy.Rate(10)
         start = rospy.Time.now().to_sec()
         while not rospy.is_shutdown():
             elapsed = rospy.Time.now().to_sec() - start
             if elapsed >= self.duration + 0.5:
                 break
-            progress = min(elapsed / self.duration * 100, 100)
+            progress = min(elapsed / self.duration, 1.0)
             sys.stdout.write(
-                f"\r  Progress: {progress:5.1f}% | Frames: {len(self.recorded_frames)}"
+                f"\r  Progress: {progress * 100:5.1f}% | Frames: {self._pipeline.frame_count}"
             )
             sys.stdout.flush()
+            if feedback_cb:
+                feedback_cb(progress, self._pipeline.frame_count)
             rate.sleep()
 
         self.is_recording = False
-        print(f"\n  Recording complete: {len(self.recorded_frames)} frames")
+        n_frames = self._pipeline.frame_count
+        print(f"\n  Recording complete: {n_frames} frames")
 
-        return self.recorded_frames
+        return n_frames
 
     # =========================================================================
     # Phase 5: Identify inertial parameters
     # =========================================================================
 
-    def phase_identify(self, frames: list[dict]) -> bool:
+    def phase_identify(self, interactive: bool = True) -> IdentificationResult | None:
+        """Run identification using pipeline.
+
+        Args:
+            interactive: If True, display results and prompt for acceptance.
+                If False (action mode), auto-accept.
+
+        Returns:
+            IdentificationResult if accepted/auto, None if rejected.
+        """
         print("\n" + "=" * 60)
         print("  PHASE 5: INERTIAL PARAMETER IDENTIFICATION")
         print("=" * 60)
 
-        if len(frames) < 10:
+        if self._pipeline.frame_count < 10:
             print("  ERROR: Not enough frames recorded!")
-            return False
+            return None
 
-        # Convert to relative time and trim
-        start_time = frames[0]["time"]
-        trimmed_frames = []
-        all_frames = []
-        for frame in frames:
-            rel_time = frame["time"] - start_time
-            frame_copy = frame.copy()
-            frame_copy["time"] = rel_time
-            all_frames.append(frame_copy)
-            if self.trim_start <= rel_time <= self.trim_end:
-                trimmed_frames.append(frame_copy)
+        # Run identification via pipeline
+        result = self._pipeline.identify(
+            trim_start=self.trim_start,
+            trim_end=self.trim_end,
+            gripper_cal=self._gripper_cal_params,
+        )
 
-        print(f"  Total frames: {len(all_frames)}")
-        print(f"  Trimmed [{self.trim_start}s, {self.trim_end}s]: {len(trimmed_frames)} frames")
+        # Display results
+        self._print_identification_result(result)
 
-        if len(trimmed_frames) < 10:
-            print("  ERROR: Not enough frames in trim window!")
-            return False
+        # Save results
+        results_dir = self._save_results(result)
+        print(f"  Results saved to: {results_dir}")
+        result.meta["results_dir"] = results_dir
 
-        # Build regressor and wrench matrices
-        S_list = [np.array(f["regressor"]) for f in trimmed_frames]
-        W_list = [np.array(f["wrench"]) for f in trimmed_frames]
+        # Determine which parameters to publish:
+        # If gripper calibration is available, publish object params (difference method)
+        # Otherwise, publish total params (gripper + payload)
+        if result.object_params is not None and "OLS+bias" in result.object_params:
+            publish_params = result.object_params["OLS+bias"]
+            publish_label = "OLS+bias object (difference method)"
+        else:
+            publish_params = result.params
+            publish_label = "OLS+bias total"
 
-        S_total = np.vstack(S_list)  # (6*N, 10)
-        W_total = np.hstack(W_list)  # (6*N,)
+        if not interactive:
+            # Auto-accept in action mode
+            self._publish_inertia_params(publish_params)
+            print(f"  Inertia parameters published ({publish_label}, auto-accepted).")
+            return result
 
-        N = len(trimmed_frames)
-        print(f"  S matrix: {S_total.shape}, W vector: {W_total.shape}")
+        # Interactive prompt
+        while True:
+            response = input(f"\n  Accept and publish {publish_label}? (y/n) > ").strip().lower()
+            if response in ("y", "yes"):
+                self._publish_inertia_params(publish_params)
+                print(f"  Inertia parameters published ({publish_label}).")
+                return result
+            elif response in ("n", "no"):
+                print("  Results not published.")
+                return None
+            else:
+                print("  Please enter 'y' or 'n'.")
 
-        # Augment regressor with constant bias columns to absorb F/T sensor offset.
-        # Following Kubus et al. (2007) Approach 2: [A | I_6] @ [phi; b] = W
-        bias_block = np.tile(np.eye(6), (N, 1))  # (6*N, 6)
-        S_aug = np.hstack([S_total, bias_block])  # (6*N, 16)
-
-        # --- Solve with 4 methods ---
-        results = {}
-
-        # OLS
-        print("  Solving OLS...")
-        try:
-            pi, _, rank, _ = np.linalg.lstsq(S_total, W_total, rcond=None)
-            results["OLS"] = pi
-        except Exception as e:
-            print(f"  OLS failed: {e}")
-            results["OLS"] = np.zeros(10)
-
-        # TLS
-        print(f"  Solving TLS ({self.tls_scaling.value})...")
-        try:
-            tls_result = solve_tls_weighted(S_total, W_total, scaling_mode=self.tls_scaling)
-            results["TLS"] = tls_result.x
-        except Exception as e:
-            print(f"  TLS failed: {e}")
-            results["TLS"] = np.zeros(10)
-
-        # OLS+bias
-        print("  Solving OLS+bias...")
-        try:
-            pi_aug, _, rank_aug, _ = np.linalg.lstsq(S_aug, W_total, rcond=None)
-            results["OLS+bias"] = pi_aug[:10]
-            bias_ols = pi_aug[10:]
-        except Exception as e:
-            print(f"  OLS+bias failed: {e}")
-            results["OLS+bias"] = np.zeros(10)
-            bias_ols = np.zeros(6)
-
-        # TLS+bias (Partial EIV: bias columns are error-free)
-        print(f"  Solving TLS+bias ({self.tls_scaling.value}, partial EIV)...")
-        try:
-            bias_col_indices = list(range(10, 16))
-            tls_bias_result = solve_tls_weighted(
-                S_aug, W_total,
-                scaling_mode=self.tls_scaling,
-                error_free_cols=bias_col_indices,
-            )
-            results["TLS+bias"] = tls_bias_result.x[:10]
-            bias_tls = tls_bias_result.x[10:]
-        except Exception as e:
-            print(f"  TLS+bias failed: {e}")
-            results["TLS+bias"] = np.zeros(10)
-            bias_tls = np.zeros(6)
-
-        # --- Display results ---
+    def _print_identification_result(self, result: IdentificationResult):
+        """Display identification results in tabular format."""
         methods = ["OLS", "TLS", "OLS+bias", "TLS+bias"]
+        all_params = {
+            "OLS": result.ols,
+            "TLS": result.tls.x,
+            "OLS+bias": result.ols_bias,
+            "TLS+bias": result.tls_bias.x[:10],
+        }
+
+        N = result.meta["trimmed_frames"]
         print()
         print("=" * 76)
         print("  INERTIA PARAMETER ESTIMATION RESULTS")
@@ -505,7 +505,7 @@ class ExcitationTrajectoryReplayNode:
         for i, name in enumerate(PARAM_NAMES):
             row = f"  {name:10s}"
             for m in methods:
-                row += f" {results[m][i]:>14.6f}"
+                row += f" {all_params[m][i]:>14.6f}"
             print(row)
         print()
 
@@ -514,25 +514,16 @@ class ExcitationTrajectoryReplayNode:
         print("  " + "-" * 40)
         for i, label in enumerate(bias_labels):
             unit = "N" if i < 3 else "Nm"
-            print(f"  {label:10s} {bias_ols[i]:>13.4f}{unit} {bias_tls[i]:>13.4f}{unit}")
+            print(f"  {label:10s} {result.bias_ols[i]:>13.4f}{unit} {result.bias_tls[i]:>13.4f}{unit}")
         print("=" * 76)
 
-        # --- Difference method: subtract gripper inertia ---
-        object_results = {}
-        if self.gripper_cal is not None:
-            cal_methods = self.gripper_cal["methods"]
+        # Difference method results
+        if result.object_params is not None:
             print()
             print("=" * 76)
             print("  OBJECT INERTIA (difference method: φ_total - φ_gripper)")
             print("=" * 76)
-            available = []
-            for m in methods:
-                if m in cal_methods:
-                    phi_gripper = np.array(cal_methods[m]["params"])
-                    phi_object = results[m] - phi_gripper
-                    object_results[m] = phi_object
-                    available.append(m)
-
+            available = [m for m in methods if m in result.object_params]
             if available:
                 header = f"  {'param':10s}" + "".join(f" {m:>14s}" for m in available)
                 print(header)
@@ -540,43 +531,12 @@ class ExcitationTrajectoryReplayNode:
                 for i, name in enumerate(PARAM_NAMES):
                     row = f"  {name:10s}"
                     for m in available:
-                        row += f" {object_results[m][i]:>14.6f}"
+                        row += f" {result.object_params[m][i]:>14.6f}"
                     print(row)
             print("=" * 76)
 
-        # Save results
-        results_dir = self._save_results(
-            all_frames,
-            trimmed_frames,
-            results,
-            bias_ols,
-            bias_tls,
-            object_results=object_results,
-        )
-        print(f"  Results saved to: {results_dir}")
-
-        # Prompt to accept (publish OLS+bias as default)
-        while True:
-            response = input("\n  Accept and publish OLS+bias? (y/n) > ").strip().lower()
-            if response in ("y", "yes"):
-                self._publish_inertia_params(results["OLS+bias"])
-                print("  Inertia parameters published (OLS+bias).")
-                return True
-            elif response in ("n", "no"):
-                print("  Results not published.")
-                return False
-            else:
-                print("  Please enter 'y' or 'n'.")
-
-    def _save_results(
-        self,
-        all_frames: list[dict],
-        trimmed_frames: list[dict],
-        results: dict[str, np.ndarray],
-        bias_ols: np.ndarray,
-        bias_tls: np.ndarray,
-        object_results: dict[str, np.ndarray] | None = None,
-    ) -> str:
+    def _save_results(self, result: IdentificationResult) -> str:
+        """Save identification results to timestamped directory."""
         import rospkg
 
         rospack = rospkg.RosPack()
@@ -587,37 +547,37 @@ class ExcitationTrajectoryReplayNode:
         results_dir = os.path.join(package_path, "results", dirname)
         os.makedirs(results_dir, exist_ok=True)
 
-        # Save result JSON
         output_data = {
             "meta": {
                 "timestamp": timestamp_str,
-                "total_frames": len(all_frames),
-                "trimmed_frames": len(trimmed_frames),
-                "trim_start": self.trim_start,
-                "trim_end": self.trim_end,
-                "tls_scaling": self.tls_scaling.value,
-                "gripper_calibration": bool(self.gripper_cal),
+                "total_frames": result.meta["total_frames"],
+                "trimmed_frames": result.meta["trimmed_frames"],
+                "trim_start": result.meta["trim_start"],
+                "trim_end": result.meta["trim_end"],
+                "tls_scaling": result.meta["tls_scaling"],
+                "gripper_calibration": result.object_params is not None,
             },
-            "results": {method: {"params": params.tolist()} for method, params in results.items()},
+            "results": {
+                "OLS": {"params": result.ols.tolist()},
+                "TLS": {"params": result.tls.x.tolist()},
+                "OLS+bias": {"params": result.ols_bias.tolist()},
+                "TLS+bias": {"params": result.tls_bias.x[:10].tolist()},
+            },
             "bias": {
-                "ols": bias_ols.tolist(),
-                "tls": bias_tls.tolist(),
+                "ols": result.bias_ols.tolist(),
+                "tls": result.bias_tls.tolist(),
             },
-            "frames": trimmed_frames,
         }
 
-        if object_results:
+        if result.object_params is not None:
             output_data["object_results"] = {
                 method: {"params": params.tolist()}
-                for method, params in object_results.items()
+                for method, params in result.object_params.items()
             }
 
         result_path = os.path.join(results_dir, "result.json")
         with open(result_path, "w") as f:
             json.dump(output_data, f, indent=2)
-
-        # Save plots
-        plot_kinematics_wrench(trimmed_frames, results_dir)
 
         return results_dir
 
@@ -629,34 +589,110 @@ class ExcitationTrajectoryReplayNode:
         rospy.loginfo("Published inertia parameters and iparams_identified=True")
 
     # =========================================================================
+    # ActionServer callback
+    # =========================================================================
+
+    def _action_execute_cb(self, goal):
+        """Execute excitation identification via actionlib."""
+        rospy.loginfo("Excitation action goal received.")
+
+        # Override parameters from goal if provided
+        if goal.trim_start != 0.0 or goal.trim_end != 0.0:
+            self.trim_start = goal.trim_start
+            self.trim_end = goal.trim_end if goal.trim_end > 0 else float("inf")
+
+        if goal.gripper_calibration_path:
+            try:
+                with open(goal.gripper_calibration_path) as f:
+                    cal = json.load(f)
+                if "methods" in cal and "OLS+bias" in cal["methods"]:
+                    self._gripper_cal_params = np.array(cal["methods"]["OLS+bias"]["params"])
+                    rospy.loginfo(f"Gripper calibration loaded from goal: {goal.gripper_calibration_path}")
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                rospy.logwarn(f"Failed to load gripper calibration from goal: {e}")
+
+        action_result = ExcitationResult()
+
+        def send_feedback(progress, frame_count):
+            fb = ExcitationFeedback()
+            fb.phase = 4
+            fb.phase_name = "replay"
+            fb.progress = progress
+            fb.recorded_frames = frame_count
+            self._action_server.publish_feedback(fb)
+
+        try:
+            # Phase 3: Move to start
+            fb = ExcitationFeedback()
+            fb.phase = 3
+            fb.phase_name = "move_to_start"
+            fb.progress = 0.0
+            self._action_server.publish_feedback(fb)
+            self.phase_move_to_start()
+
+            # Phase 4: Replay and record
+            self.phase_replay_and_record(feedback_cb=send_feedback)
+
+            # Phase 5: Identify (non-interactive)
+            fb = ExcitationFeedback()
+            fb.phase = 5
+            fb.phase_name = "identify"
+            fb.progress = 0.0
+            fb.recorded_frames = self._pipeline.frame_count
+            self._action_server.publish_feedback(fb)
+
+            result = self.phase_identify(interactive=False)
+
+            if result is not None:
+                action_result.success = True
+                # Return object params if difference method was used
+                if result.object_params and "OLS+bias" in result.object_params:
+                    action_result.inertia_params = result.object_params["OLS+bias"].tolist()
+                    action_result.object_inertia_params = result.object_params["OLS+bias"].tolist()
+                else:
+                    action_result.inertia_params = result.params.tolist()
+                action_result.bias = result.bias.tolist()
+                action_result.results_dir = result.meta.get("results_dir", "")
+                action_result.message = f"Identified ({result.meta['trimmed_frames']} frames)"
+                self._action_server.set_succeeded(action_result)
+            else:
+                action_result.success = False
+                action_result.message = "Identification failed (insufficient frames)"
+                self._action_server.set_aborted(action_result)
+
+        except Exception as e:
+            rospy.logerr(f"Excitation action failed: {e}")
+            action_result.success = False
+            action_result.message = str(e)
+            self._action_server.set_aborted(action_result)
+
+    # =========================================================================
     # Main run
     # =========================================================================
 
     def run(self):
+        if self.standalone:
+            self._run_standalone()
+        else:
+            self._run_action_server()
+
+    def _run_standalone(self):
+        """Interactive standalone mode (original behavior)."""
         print()
         print("=" * 60)
         print("  EXCITATION TRAJECTORY REPLAY")
         print("=" * 60)
 
         if not self.skip_teleop:
-            # Phase 1: Teleop grasp
             self.phase_teleop_grasp()
-
-            # Phase 2: Close gripper
             self.phase_close_gripper()
 
-        accepted = False
-        while not accepted:
-            # Phase 3: Move to start pose (flange down)
+        result = None
+        while result is None:
             self.phase_move_to_start()
-
-            # Phase 4: Replay and record
-            frames = self.phase_replay_and_record()
-
-            # Phase 5: Identify
-            accepted = self.phase_identify(frames)
-
-            if not accepted:
+            self.phase_replay_and_record()
+            result = self.phase_identify(interactive=True)
+            if result is None:
                 print("\n  Retrying from start pose...")
 
         print()
@@ -664,8 +700,13 @@ class ExcitationTrajectoryReplayNode:
         print("  COMPLETE - Parameters published")
         print("=" * 60)
 
-        # Keep node alive for latched publishers
         print("  Node alive (latched topics active). Press Ctrl+C to exit.")
+        rospy.spin()
+
+    def _run_action_server(self):
+        """ActionServer mode: wait for goals from data_collection."""
+        self._action_server.start()
+        rospy.loginfo("ExcitationActionServer started. Waiting for goals...")
         rospy.spin()
 
 

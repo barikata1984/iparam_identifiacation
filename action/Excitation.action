@@ -1,0 +1,28 @@
+# Excitation trajectory replay + inertial parameter identification
+#
+# Goal: trajectory path and identification parameters
+# Feedback: progress during replay
+# Result: identified inertial parameters (OLS+bias recommended)
+
+# --- Goal ---
+string trajectory_path          # Path to excitation trajectory JSON
+string wrench_topic             # F/T sensor topic (default: /wrench)
+float64 trim_start              # Trim window start [s from trajectory start]
+float64 trim_end                # Trim window end [s, inf = no limit]
+string tls_scaling              # TLS scaling mode: identity/data_variance/noise_variance
+string gripper_calibration_path # Path to gripper.json (empty = skip difference method)
+bool skip_teleop                # Skip teleop/gripper phases (bare flange mode)
+---
+# --- Result ---
+bool success                    # True if identification succeeded
+float64[] inertia_params        # Recommended (OLS+bias) inertial parameters [10]
+float64[] bias                  # Recommended (OLS+bias) F/T bias [6]
+float64[] object_inertia_params # Object inertia via difference method [10] (empty if no gripper_cal)
+string results_dir              # Path to saved results directory
+string message                  # Status message
+---
+# --- Feedback ---
+uint8 phase                     # Current phase (3=move_to_start, 4=replay, 5=identify)
+string phase_name               # Human-readable phase name
+float32 progress                # Progress within current phase [0.0, 1.0]
+uint32 recorded_frames          # Number of frames recorded so far
