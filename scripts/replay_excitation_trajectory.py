@@ -60,8 +60,9 @@ from utilities.wrist_end_kinematics_utils import get_regressor_matrix  # noqa: E
 
 matplotlib.use("Agg")
 
-# Default trajectory path
+# Default paths
 DEFAULT_TRAJECTORY = str(IPARAM_ROOT / "data" / "trajectories" / "excitation_trajectory.json")
+DEFAULT_GRIPPER_CAL = str(IPARAM_ROOT / "data" / "calibration" / "gripper.json")
 
 
 class ExcitationTrajectoryReplayNode:
@@ -107,6 +108,18 @@ class ExcitationTrajectoryReplayNode:
             rospy.logwarn(f"Unknown tls_scaling '{scaling_str}', using noise_variance. Valid: {valid}")
             self.tls_scaling = ScalingMode.NOISE_VARIANCE
         rospy.loginfo(f"  TLS scaling mode: {self.tls_scaling.value}")
+
+        # --- Gripper calibration (for difference method) ---
+        gripper_cal_path = rospy.get_param("~gripper_calibration", "")
+        self.gripper_cal = None
+        if gripper_cal_path:
+            try:
+                with open(gripper_cal_path) as f:
+                    self.gripper_cal = json.load(f)
+                rospy.loginfo(f"  Gripper calibration loaded: {gripper_cal_path}")
+                rospy.loginfo("  → Object identification mode: gripper inertia will be subtracted")
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                rospy.logwarn(f"  Failed to load gripper calibration: {e}")
 
         if self.skip_teleop:
             # Direct robot control without teleop/gripper (e.g. bare flange runs)
@@ -504,6 +517,33 @@ class ExcitationTrajectoryReplayNode:
             print(f"  {label:10s} {bias_ols[i]:>13.4f}{unit} {bias_tls[i]:>13.4f}{unit}")
         print("=" * 76)
 
+        # --- Difference method: subtract gripper inertia ---
+        object_results = {}
+        if self.gripper_cal is not None:
+            cal_methods = self.gripper_cal["methods"]
+            print()
+            print("=" * 76)
+            print("  OBJECT INERTIA (difference method: φ_total - φ_gripper)")
+            print("=" * 76)
+            available = []
+            for m in methods:
+                if m in cal_methods:
+                    phi_gripper = np.array(cal_methods[m]["params"])
+                    phi_object = results[m] - phi_gripper
+                    object_results[m] = phi_object
+                    available.append(m)
+
+            if available:
+                header = f"  {'param':10s}" + "".join(f" {m:>14s}" for m in available)
+                print(header)
+                print("  " + "-" * (10 + 15 * len(available)))
+                for i, name in enumerate(PARAM_NAMES):
+                    row = f"  {name:10s}"
+                    for m in available:
+                        row += f" {object_results[m][i]:>14.6f}"
+                    print(row)
+            print("=" * 76)
+
         # Save results
         results_dir = self._save_results(
             all_frames,
@@ -511,6 +551,7 @@ class ExcitationTrajectoryReplayNode:
             results,
             bias_ols,
             bias_tls,
+            object_results=object_results,
         )
         print(f"  Results saved to: {results_dir}")
 
@@ -534,6 +575,7 @@ class ExcitationTrajectoryReplayNode:
         results: dict[str, np.ndarray],
         bias_ols: np.ndarray,
         bias_tls: np.ndarray,
+        object_results: dict[str, np.ndarray] | None = None,
     ) -> str:
         import rospkg
 
@@ -554,6 +596,7 @@ class ExcitationTrajectoryReplayNode:
                 "trim_start": self.trim_start,
                 "trim_end": self.trim_end,
                 "tls_scaling": self.tls_scaling.value,
+                "gripper_calibration": bool(self.gripper_cal),
             },
             "results": {method: {"params": params.tolist()} for method, params in results.items()},
             "bias": {
@@ -562,6 +605,12 @@ class ExcitationTrajectoryReplayNode:
             },
             "frames": trimmed_frames,
         }
+
+        if object_results:
+            output_data["object_results"] = {
+                method: {"params": params.tolist()}
+                for method, params in object_results.items()
+            }
 
         result_path = os.path.join(results_dir, "result.json")
         with open(result_path, "w") as f:

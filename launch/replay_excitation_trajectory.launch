@@ -28,6 +28,7 @@
     <arg name="trim_end" default="inf"/>
     <arg name="skip_teleop" default="false" doc="Skip teleop/gripper phases; zero F/T at start pose (for gripper-only identification)"/>
     <arg name="tls_scaling" default="noise_variance" doc="TLS scaling mode: identity, data_variance, noise_variance"/>
+    <arg name="gripper_calibration" default="$(find iparam_identification)/data/calibration/gripper.json" doc="Gripper calibration file for difference method. Set empty to disable."/>
     <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
     <arg name="teleop_config" default="$(find osx_bilateral)/configs/teleop.yaml"/>
 
@@ -65,5 +66,6 @@
         <param name="trim_end" value="$(arg trim_end)"/>
         <param name="skip_teleop" value="$(arg skip_teleop)"/>
         <param name="tls_scaling" value="$(arg tls_scaling)"/>
+        <param name="gripper_calibration" value="$(arg gripper_calibration)"/>
     </node>
 </launch>

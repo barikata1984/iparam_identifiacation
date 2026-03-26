@@ -21,14 +21,16 @@
   - [x] 5c': ft_raw_wrench の単位を特定する → **感度 1 raw unit = 1 N を実測確認** (I-7 解決)
 - [x] Step 6 (予備): ペイロードなし bare flange で skip_teleop モードの動作確認
   - m ≈ 0.012 kg (OLS+bias), -0.006 kg (OLS raw) — 期待通りゼロ近辺
-- [ ] Step 6: グリッパキャリブレーション（物体なしで励起軌道実行 → φ_gripper 推定）
-  - グリッパ付き実機計測を 2 回実施（actual_TCP_force 起動時ゼロ化問題で推定精度不十分）
-  - skip_teleop モードを簡素化済み（Phase 3a マウント姿勢フロー削除、開始姿勢で zero_ftsensor）
-  - 推定手法を 4 並列化済み（OLS, TLS, OLS+bias, TLS+bias）
-  - Partial EIV 実装済み（バイアス列をエラーフリーに指定）
-  - 実機 5 試行の結果: OLS+bias m≈1.01kg (+6%), TLS+bias m≈1.36kg (+43%) — **OLS+bias を主推定手法に**
-- [ ] Step 7: 物体同定（差分法: φ_object = φ_total - φ_gripper）
+- [x] Step 6: グリッパキャリブレーション（物体なしで励起軌道実行 → φ_gripper 推定）
+  - skip_teleop 5 試行: OLS+bias m≈1.01kg (+6%), TLS+bias m≈1.36kg (+43%)
+  - キャリブレーションファイル保存: `data/calibration/gripper.json`（4 手法すべて）
+- [x] Step 7: 差分法実装（φ_object = φ_total - φ_gripper）
+  - `gripper_calibration` ROS パラメータ追加（デフォルトで gripper.json を読み込み）
+  - 4 手法すべてで各手法対応の φ_gripper を差し引き
 - [ ] Step 8: 120g 物体に対して正常な推定値を確認
+  - 初回 5 試行: OLS+bias 184g (+53%), TLS+bias 193g (+61%) — 系統的過大推定
+  - 原因候補: skip_teleop vs teleop のゼロ化姿勢差（開始姿勢 vs ホーム姿勢）
+  - **次ステップ**: ホーム姿勢を開始姿勢に揃えて再計測（φ_gripper + φ_total を同一条件で）
 
 ---
 
