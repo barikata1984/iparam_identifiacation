@@ -68,7 +68,7 @@ class ExcitationTrajectoryReplayNode:
     """Replay excitation trajectory on real robot and identify inertial parameters."""
 
     def __init__(self):
-        rospy.init_node("excitation_trajectory_replay", anonymous=True)
+        rospy.init_node("excitation_trajectory_replay", anonymous=False)
 
         # --- ROS parameters ---
         trajectory_path = rospy.get_param("~trajectory_path", DEFAULT_TRAJECTORY)
@@ -431,7 +431,7 @@ class ExcitationTrajectoryReplayNode:
             print(f"  OLS failed: {e}")
             results["OLS"] = np.zeros(10)
 
-        # TLS (COLUMN_ONLY scaling)
+        # TLS (NOISE_VARIANCE scaling — ML-optimal under Gaussian noise)
         print("  Solving TLS...")
         try:
             tls_result = solve_tls_weighted(S_total, W_total)
@@ -564,26 +564,6 @@ class ExcitationTrajectoryReplayNode:
         rospy.loginfo("Published inertia parameters and iparams_identified=True")
 
     # =========================================================================
-    # Phase 6: Re-sync leader
-    # =========================================================================
-
-    def phase_resync_leader(self):
-        if self.skip_teleop:
-            return
-
-        print("\n" + "=" * 60)
-        print("  PHASE 6: RE-SYNC LEADER")
-        print("=" * 60)
-
-        print("  Moving to home position...")
-        self.robot.move_to_initial_pose()
-        print("  At home position.")
-
-        print("  Align leader arm with robot, then press ENTER.")
-        self.controller.sync_with_leader()
-        print("  Leader re-synced.")
-
-    # =========================================================================
     # Main run
     # =========================================================================
 
@@ -609,9 +589,6 @@ class ExcitationTrajectoryReplayNode:
         # Phase 5: Identify
         accepted = self.phase_identify(frames)
 
-        # Phase 6: Re-sync
-        self.phase_resync_leader()
-
         print()
         print("=" * 60)
         if accepted:
@@ -621,7 +598,7 @@ class ExcitationTrajectoryReplayNode:
         print("=" * 60)
 
         # Keep node alive for latched publishers
-        print("  Press Ctrl+C to exit.")
+        print("  Node alive (latched topics active). Press Ctrl+C to exit.")
         rospy.spin()
 
 

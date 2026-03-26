@@ -6,6 +6,8 @@ Based on:
 - Golub, G. H., & Van Loan, C. F. (2012). Matrix Computations, §6.3
 - Kubus, D., Kröger, T., & Wahl, F. M. (2008). On-line estimation of
   inertial parameters using a recursive total least-squares approach.
+- Markovsky, I., & Van Huffel, S. (2007). Overview of total least-squares
+  methods. Signal Processing, 87(10), 2283-2302.
 
 Model: (A + E) @ x = b + r
 where:
@@ -20,6 +22,11 @@ subject to: (A + E) @ x = b + r
 
 Weighted TLS minimizes: ||D @ [E | r] @ T||_F
 where D and T are diagonal weighting matrices.
+
+Scaling modes differ in HOW they construct T:
+- IDENTITY: T=I (no scaling)
+- DATA_VARIANCE: T=diag(1/std_data) — column normalization for numerical conditioning
+- NOISE_VARIANCE: T=diag(1/σ_noise) — ML-optimal weighting under Gaussian noise
 """
 
 import numpy as np
@@ -30,11 +37,21 @@ from enum import Enum
 
 
 class ScalingMode(Enum):
-    """Scaling mode for TLS solver."""
+    """Scaling mode for TLS solver.
 
-    NONE = "none"  # No scaling (D=I, T=I)
-    COLUMN_ONLY = "column"  # T = 1/std(columns), D = I
-    FULL = "full"  # T = 1/std(columns), D = 1/std(rows)
+    Modes differ in what drives the column weighting T:
+    - IDENTITY: No scaling (T=I, D=I). Baseline.
+    - DATA_VARIANCE: T=diag(1/std_data). Normalizes columns to unit variance
+      for numerical conditioning. Not statistically motivated.
+    - NOISE_VARIANCE: T=diag(1/σ_noise). ML-optimal under Gaussian noise.
+      Noise std estimated via first differences: σ = std(diff(col)) / √2.
+
+    Legacy aliases NONE, COLUMN_ONLY, FULL are preserved for compatibility.
+    """
+
+    IDENTITY = "identity"
+    DATA_VARIANCE = "data_variance"
+    NOISE_VARIANCE = "noise_variance"
 
 
 @dataclass
@@ -54,7 +71,7 @@ class TLSResult:
 def solve_tls_weighted(
     A: NDArray[np.floating],
     b: NDArray[np.floating],
-    scaling_mode: ScalingMode = ScalingMode.COLUMN_ONLY,
+    scaling_mode: ScalingMode = ScalingMode.NOISE_VARIANCE,
     regularization: float = 1e-10,
 ) -> TLSResult:
     """
@@ -167,27 +184,25 @@ def _construct_weighting_matrices(
     """
     m, n_plus_1 = Aug.shape
 
-    if scaling_mode == ScalingMode.NONE:
+    if scaling_mode == ScalingMode.IDENTITY:
         D = np.eye(m)
         T = np.eye(n_plus_1)
 
-    elif scaling_mode == ScalingMode.COLUMN_ONLY:
-        # T = diag(1 / std(columns))
-        col_std = np.std(Aug, axis=0)
-        col_std = np.maximum(col_std, regularization)  # Prevent division by zero
-        T = np.diag(1.0 / col_std)
-        D = np.eye(m)
-
-    elif scaling_mode == ScalingMode.FULL:
-        # T = diag(1 / std(columns))
+    elif scaling_mode == ScalingMode.DATA_VARIANCE:
+        # T = diag(1 / std(columns)) — data variance normalization
         col_std = np.std(Aug, axis=0)
         col_std = np.maximum(col_std, regularization)
         T = np.diag(1.0 / col_std)
+        D = np.eye(m)
 
-        # D = diag(1 / std(rows))
-        row_std = np.std(Aug, axis=1)
-        row_std = np.maximum(row_std, regularization)
-        D = np.diag(1.0 / row_std)
+    elif scaling_mode == ScalingMode.NOISE_VARIANCE:
+        # T = diag(1 / σ_noise) — ML-optimal under Gaussian noise
+        # Estimate noise std via first differences: σ = std(diff(col)) / √2
+        # At high sampling rates, diff removes smooth signal, leaving noise.
+        noise_std = np.std(np.diff(Aug, axis=0), axis=0) / np.sqrt(2)
+        noise_std = np.maximum(noise_std, regularization)
+        T = np.diag(1.0 / noise_std)
+        D = np.eye(m)
 
     else:
         raise ValueError(f"Unknown scaling mode: {scaling_mode}")
@@ -198,7 +213,7 @@ def _construct_weighting_matrices(
 def solve_tls_batch(
     A: NDArray[np.floating],
     b: NDArray[np.floating],
-    scaling_mode: ScalingMode = ScalingMode.COLUMN_ONLY,
+    scaling_mode: ScalingMode = ScalingMode.NOISE_VARIANCE,
 ) -> Tuple[NDArray[np.floating], float]:
     """
     Convenience wrapper for solve_tls_weighted.
@@ -218,25 +233,31 @@ def solve_tls_batch(
     return result.x, result.sigma_min
 
 
+_COMPARE_MODES = [ScalingMode.IDENTITY, ScalingMode.DATA_VARIANCE, ScalingMode.NOISE_VARIANCE]
+
+
 def solve_tls_compare(
     A: NDArray[np.floating],
     b: NDArray[np.floating],
+    modes: list[ScalingMode] | None = None,
 ) -> Dict[str, TLSResult]:
     """
-    Solve TLS with all three scaling modes and return comparison.
-
-    Useful for experimental comparison of scaling strategies.
+    Solve TLS with multiple scaling modes and return comparison.
 
     Args:
         A: Data matrix (m x n)
         b: Observation vector (m,)
+        modes: Scaling modes to compare. Defaults to IDENTITY, DATA_VARIANCE,
+               NOISE_VARIANCE.
 
     Returns:
         Dictionary mapping scaling mode name to TLSResult
     """
-    results = {}
+    if modes is None:
+        modes = _COMPARE_MODES
 
-    for mode in ScalingMode:
+    results = {}
+    for mode in modes:
         try:
             result = solve_tls_weighted(A, b, scaling_mode=mode)
             results[mode.value] = result

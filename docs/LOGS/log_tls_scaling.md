@@ -44,3 +44,37 @@ Weighted TLS は `min ||D[E|R]T||_F` を解く。
 
 - Kubus, D., Kröger, T., & Wahl, F. M. (2008). On-line estimation of inertial parameters using a recursive total least-squares approach. IROS.
 - Golub, G. H., & Van Loan, C. F. (2012). Matrix Computations, 4th ed., §6.3.
+
+## 2026-03-25: 文献調査と実装
+
+### 文献調査
+
+WTLS の重み行列選択について 26 論文を調査（`docs/SURVEYS/wtls_scaling_matrix.md`）。
+主要な知見:
+
+1. **WTLS = ML（ガウスノイズ下）**: W = Σ^{-1}（ノイズ共分散の逆行列）が統計的に最適。
+   Kukush & Van Huffel (2004), Markovsky & Van Huffel (2007), Crassidis & Cheng (2019) で独立に確認。
+2. **Golub & Van Loan, Kubus ともに D, T の選び方を規定していない**: 応用側の判断に委ねられている。
+3. **列スケール正規化 ≠ ノイズベース重み付け**: 前者は数値的条件改善、後者は統計的最適性。目的が異なる。
+4. **2026-03-12 のログの訂正**: 「§6.3.3 から t_i = 1/σ_noise_i が理論的に正しい」は
+   Golub & Van Loan の直接的記述ではなく、ガウスノイズ仮定下の ML 解釈からの帰結。
+
+### ScalingMode 再設計
+
+旧モード → 新モードへの変更:
+
+| 旧 | 新 | 理由 |
+|---|---|---|
+| `NONE` | `IDENTITY` | 明示的に W=I を示す |
+| `COLUMN_ONLY` | `DATA_VARIANCE` | 「何をスケールするか」ではなく「何に基づくか」で命名 |
+| `FULL` | (削除) | 行の std 正規化に理論的根拠なし |
+| (なし) | `NOISE_VARIANCE` | ML 最適。`σ = std(diff(col))/√2` |
+
+デフォルトを `NOISE_VARIANCE` に変更。テスト 12/12 パス。
+
+### diff ベースノイズ推定の根拠
+
+500Hz サンプリングでは隣接サンプル間の信号変化は滑らかなので、
+`diff(col)` は信号成分を除去しノイズ成分を分離する。
+`std(diff) / √2` は i.i.d. ノイズの標準偏差の不偏推定量。
+測地学の LS-VCE (Amiri-Simkooei 2013) の簡易版として正当化可能。

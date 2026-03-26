@@ -126,16 +126,41 @@ class TestTLSSynthetic:
     def test_noiseless_exact_recovery(self):
         """TLS with no noise should also recover params exactly."""
         S, W = make_synthetic_data(PHI_TRUE, n_frames=200, noise_std=0.0)
-        result = solve_tls_weighted(S, W, scaling_mode=ScalingMode.NONE)
+        result = solve_tls_weighted(S, W, scaling_mode=ScalingMode.IDENTITY)
 
         npt.assert_allclose(result.x, PHI_TRUE, atol=1e-8)
 
-    def test_column_scaling_noiseless(self):
-        """TLS with column scaling and no noise should recover params."""
+    def test_data_variance_scaling_noiseless(self):
+        """TLS with data-variance scaling and no noise should recover params."""
         S, W = make_synthetic_data(PHI_TRUE, n_frames=200, noise_std=0.0)
-        result = solve_tls_weighted(S, W, scaling_mode=ScalingMode.COLUMN_ONLY)
+        result = solve_tls_weighted(S, W, scaling_mode=ScalingMode.DATA_VARIANCE)
 
         npt.assert_allclose(result.x, PHI_TRUE, atol=1e-8)
+
+    def test_noise_variance_scaling_noiseless(self):
+        """TLS with noise-variance scaling and no noise should recover params."""
+        S, W = make_synthetic_data(PHI_TRUE, n_frames=200, noise_std=0.0)
+        # With zero noise, diff-based noise std → 0, fallback to regularization.
+        # Add tiny noise to make diff-based estimation meaningful.
+        rng = np.random.default_rng(77)
+        S_noisy = S + 1e-12 * rng.standard_normal(S.shape)
+        W_noisy = W + 1e-12 * rng.standard_normal(W.shape)
+        result = solve_tls_weighted(S_noisy, W_noisy, scaling_mode=ScalingMode.NOISE_VARIANCE)
+
+        npt.assert_allclose(result.x, PHI_TRUE, atol=1e-6)
+
+    def test_all_modes_noiseless(self):
+        """All scaling modes should recover params from noiseless data."""
+        S, W = make_synthetic_data(PHI_TRUE, n_frames=200, noise_std=0.0)
+        rng = np.random.default_rng(77)
+        # Tiny noise for NOISE_VARIANCE mode (diff-based needs nonzero signal)
+        S_nv = S + 1e-12 * rng.standard_normal(S.shape)
+        W_nv = W + 1e-12 * rng.standard_normal(W.shape)
+
+        for mode in ScalingMode:
+            data = (S_nv, W_nv) if mode == ScalingMode.NOISE_VARIANCE else (S, W)
+            result = solve_tls_weighted(*data, scaling_mode=mode)
+            npt.assert_allclose(result.x, PHI_TRUE, atol=1e-6, err_msg=f"{mode}")
 
     def test_both_noise_tls_vs_ols(self):
         """When both S and W have noise, TLS should be ≥ as good as OLS."""
@@ -145,8 +170,8 @@ class TestTLSSynthetic:
         phi_ols, *_ = np.linalg.lstsq(S, W, rcond=None)
         err_ols = np.linalg.norm(phi_ols - PHI_TRUE) / np.linalg.norm(PHI_TRUE)
 
-        # TLS (no scaling — fair comparison)
-        result_tls = solve_tls_weighted(S, W, scaling_mode=ScalingMode.NONE)
+        # TLS (identity scaling — fair comparison)
+        result_tls = solve_tls_weighted(S, W, scaling_mode=ScalingMode.IDENTITY)
         err_tls = np.linalg.norm(result_tls.x - PHI_TRUE) / np.linalg.norm(PHI_TRUE)
 
         print(f"OLS err: {err_ols:.4f}, TLS err: {err_tls:.4f}")

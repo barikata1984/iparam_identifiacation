@@ -1,6 +1,6 @@
 # TODO — マイクロタスク
 
-> **最終更新**: 2026-03-24
+> **最終更新**: 2026-03-25
 
 ---
 
@@ -14,14 +14,11 @@
   - リグレッサ・wrench・キネマティクスも個別に正しいことを確認
   - `actual_TCP_force` のゼロ化オフセットとバイアス列の共線性が推定を破壊
 - [x] Step 4: q=0 汚染の修正 (I-4) — recording 内直接計算で解消済み
-- [ ] Step 5: `ft_raw_wrench` への移行 (I-6)
+- [x] Step 5: `ft_raw_wrench` 調査 (I-6) — バイアス付き推定で十分と判明、移行不要
   - [x] 5a: プリロードキャリブレーション（6 面体姿勢で無負荷 ft_raw_wrench を計測）
   - [x] 5b: RViz で 6 姿勢プレビュー
   - [x] 5c: 実機でプリロード計測（3 回実施、時間ドリフトと単位問題を発見）
   - [x] 5c': ft_raw_wrench の単位を特定する → **感度 1 raw unit = 1 N を実測確認** (I-7 解決)
-  - [ ] 5c'': 時間ドリフトの収束条件を確認する（暖機時間の特定）
-  - [ ] 5c''': F/T センサの短期揺らぎ (±5 N) の特性評価
-  - [ ] 5d: `replay_excitation_trajectory.py` を ft_raw_wrench 対応に改修
 - [x] Step 6 (予備): ペイロードなし bare flange で skip_teleop モードの動作確認
   - m ≈ 0.012 kg (OLS+bias), -0.006 kg (OLS raw) — 期待通りゼロ近辺
 - [ ] Step 6: グリッパキャリブレーション（物体なしで励起軌道実行 → φ_gripper 推定）
@@ -35,6 +32,12 @@
 
 ## TLS スケーリング改善（I-3）
 
-- [ ] `ScalingMode.NOISE_BASED` を `tls.py` に実装（diff ベースの T + D=I）
-- [ ] 既存の 3 モードと並列比較実験（OLS との乖離が改善されるか検証）
+- [x] 文献調査: WTLS 重み行列の理論的根拠（26論文、`docs/SURVEYS/wtls_scaling_matrix.md`）
+- [x] `ScalingMode` を再設計: `IDENTITY` / `DATA_VARIANCE` / `NOISE_VARIANCE`
+  - `NOISE_VARIANCE`: `t_i = 1/σ_noise_i`（diff ベース推定）— ML 最適（ガウスノイズ下）
+  - `DATA_VARIANCE`: 旧 `COLUMN_ONLY` の改名（数値正規化、統計的根拠なし）
+  - `FULL` を削除（行の std 正規化に理論的根拠なし）
+  - デフォルトを `NOISE_VARIANCE` に変更
+- [x] テスト追加: 全モードの無ノイズ復元テスト、ノイズ有りテスト（12/12 パス）
+- [ ] 実機データでの比較実験（OLS との乖離が改善されるか検証）
 - [ ] 効果確認後、再帰的 TLS にもスケーリングを組み込む
