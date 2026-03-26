@@ -74,7 +74,7 @@ Newton-Euler 方程式から導出されるリグレッサ形式:
 ```
 
 - `A`: 6×10 リグレッサ行列（加速度・角速度から構築）
-- `φ`: 10 次元パラメータベクトル `[m, mcx, mcy, mcz, Ixx, Iyy, Izz, Ixy, Iyz, Izx]`
+- `φ`: 10 次元パラメータベクトル `[m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz]`
 
 ### TLS のスケーリング行列
 
