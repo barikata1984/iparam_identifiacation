@@ -27,6 +27,7 @@
     <arg name="trim_start" default="0.0"/>
     <arg name="trim_end" default="inf"/>
     <arg name="skip_teleop" default="false" doc="Skip teleop/gripper phases; zero F/T at start pose (for gripper-only identification)"/>
+    <arg name="tls_scaling" default="noise_variance" doc="TLS scaling mode: identity, data_variance, noise_variance"/>
     <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
     <arg name="teleop_config" default="$(find osx_bilateral)/configs/teleop.yaml"/>
 
@@ -56,12 +57,13 @@
          Kinematics are computed directly inside the node (no external kinematics node needed).
          This guarantees la/regressor/wrench consistency within each recorded frame. -->
     <node pkg="iparam_identification" type="replay_excitation_trajectory.py"
-          name="excitation_replay" output="screen" required="true">
+          name="batch_identifier" output="screen" required="true">
         <param name="trajectory_path" value="$(arg trajectory)"/>
         <param name="wrench_topic" value="$(arg wrench_topic)"/>
         <param name="cutoff_freq" value="$(arg cutoff_freq)"/>
         <param name="trim_start" value="$(arg trim_start)"/>
         <param name="trim_end" value="$(arg trim_end)"/>
         <param name="skip_teleop" value="$(arg skip_teleop)"/>
+        <param name="tls_scaling" value="$(arg tls_scaling)"/>
     </node>
 </launch>

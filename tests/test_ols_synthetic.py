@@ -180,6 +180,87 @@ class TestTLSSynthetic:
         assert err_tls < 0.5, f"TLS too far off: {err_tls}"
 
 
+class TestPartialEIV:
+    """Test Partial EIV (error-free columns) TLS solver."""
+
+    def test_bias_columns_error_free(self):
+        """Partial EIV with bias columns should recover params + bias accurately."""
+        rng = np.random.default_rng(42)
+        n_frames = 500
+        S, W = make_synthetic_data(PHI_TRUE, n_frames=n_frames, noise_std=0.01,
+                                   regressor_noise_std=0.01)
+
+        # Add constant bias to W (simulating F/T sensor offset)
+        bias_true = np.array([1.0, -2.0, 5.0, 0.1, -0.3, 0.05])
+        n_obs = len(W)
+        n_rows_per_frame = 6
+        bias_block = np.tile(np.eye(n_rows_per_frame), (n_obs // n_rows_per_frame, 1))
+        W_biased = W + bias_block @ bias_true
+
+        # Augmented system: [S | bias_block] @ [phi; bias] = W_biased
+        S_aug = np.hstack([S, bias_block])
+
+        # Full TLS (treats bias columns as noisy — wrong)
+        result_full = solve_tls_weighted(
+            S_aug, W_biased, scaling_mode=ScalingMode.IDENTITY
+        )
+        phi_full = result_full.x[:10]
+
+        # Partial EIV (bias columns are error-free — correct)
+        result_partial = solve_tls_weighted(
+            S_aug, W_biased, scaling_mode=ScalingMode.IDENTITY,
+            error_free_cols=list(range(10, 16)),
+        )
+        phi_partial = result_partial.x[:10]
+        bias_partial = result_partial.x[10:]
+
+        err_full = np.linalg.norm(phi_full - PHI_TRUE) / np.linalg.norm(PHI_TRUE)
+        err_partial = np.linalg.norm(phi_partial - PHI_TRUE) / np.linalg.norm(PHI_TRUE)
+
+        print(f"Full TLS err: {err_full:.4f}, Partial EIV err: {err_partial:.4f}")
+        # Partial EIV should be more accurate than full TLS
+        assert err_partial < err_full, (
+            f"Partial EIV ({err_partial:.4f}) should beat full TLS ({err_full:.4f})"
+        )
+        # Bias recovery should be reasonable
+        bias_err = np.linalg.norm(bias_partial - bias_true) / np.linalg.norm(bias_true)
+        assert bias_err < 0.5, f"Bias recovery too poor: {bias_err:.4f}"
+
+    def test_partial_eiv_noiseless(self):
+        """Partial EIV should recover exact params from noiseless data with bias."""
+        S, W = make_synthetic_data(PHI_TRUE, n_frames=200, noise_std=0.0)
+
+        bias_true = np.array([3.0, -1.0, 8.0, 0.2, -0.5, 0.1])
+        n_obs = len(W)
+        bias_block = np.tile(np.eye(6), (n_obs // 6, 1))
+        W_biased = W + bias_block @ bias_true
+        S_aug = np.hstack([S, bias_block])
+
+        result = solve_tls_weighted(
+            S_aug, W_biased, scaling_mode=ScalingMode.IDENTITY,
+            error_free_cols=list(range(10, 16)),
+        )
+
+        npt.assert_allclose(result.x[:10], PHI_TRUE, atol=1e-6)
+        npt.assert_allclose(result.x[10:], bias_true, atol=1e-6)
+
+    def test_partial_eiv_info_fields(self):
+        """Partial EIV result should contain partial_eiv metadata."""
+        S, W = make_synthetic_data(PHI_TRUE, n_frames=200, noise_std=0.0)
+        bias_block = np.tile(np.eye(6), (len(W) // 6, 1))
+        S_aug = np.hstack([S, bias_block])
+
+        result = solve_tls_weighted(
+            S_aug, W, scaling_mode=ScalingMode.IDENTITY,
+            error_free_cols=list(range(10, 16)),
+        )
+
+        assert result.info["partial_eiv"] is True
+        assert result.info["error_free_cols"] == list(range(10, 16))
+        assert result.info["n_original"] == 16
+        assert result.info["n_reduced"] == 10
+
+
 class TestRegressorConditioning:
     """Test how regressor matrix properties affect estimation."""
 

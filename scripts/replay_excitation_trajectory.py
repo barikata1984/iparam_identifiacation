@@ -54,7 +54,7 @@ from utilities.tool0_kinematics import (  # noqa: E402
     Tool0KinematicsCalculator,
     reorder_joint_state,
 )
-from identifiers.tls import solve_tls_weighted  # noqa: E402
+from identifiers.tls import ScalingMode, solve_tls_weighted  # noqa: E402
 from utilities.identification_utils import PARAM_NAMES, plot_kinematics_wrench  # noqa: E402
 from utilities.wrist_end_kinematics_utils import get_regressor_matrix  # noqa: E402
 
@@ -97,6 +97,16 @@ class ExcitationTrajectoryReplayNode:
 
         # --- Robot control ---
         self.skip_teleop = rospy.get_param("~skip_teleop", False)
+
+        # --- TLS scaling mode ---
+        scaling_str = rospy.get_param("~tls_scaling", "noise_variance")
+        try:
+            self.tls_scaling = ScalingMode(scaling_str)
+        except ValueError:
+            valid = [m.value for m in ScalingMode]
+            rospy.logwarn(f"Unknown tls_scaling '{scaling_str}', using noise_variance. Valid: {valid}")
+            self.tls_scaling = ScalingMode.NOISE_VARIANCE
+        rospy.loginfo(f"  TLS scaling mode: {self.tls_scaling.value}")
 
         if self.skip_teleop:
             # Direct robot control without teleop/gripper (e.g. bare flange runs)
@@ -431,10 +441,10 @@ class ExcitationTrajectoryReplayNode:
             print(f"  OLS failed: {e}")
             results["OLS"] = np.zeros(10)
 
-        # TLS (NOISE_VARIANCE scaling — ML-optimal under Gaussian noise)
-        print("  Solving TLS...")
+        # TLS
+        print(f"  Solving TLS ({self.tls_scaling.value})...")
         try:
-            tls_result = solve_tls_weighted(S_total, W_total)
+            tls_result = solve_tls_weighted(S_total, W_total, scaling_mode=self.tls_scaling)
             results["TLS"] = tls_result.x
         except Exception as e:
             print(f"  TLS failed: {e}")
@@ -451,10 +461,15 @@ class ExcitationTrajectoryReplayNode:
             results["OLS+bias"] = np.zeros(10)
             bias_ols = np.zeros(6)
 
-        # TLS+bias
-        print("  Solving TLS+bias...")
+        # TLS+bias (Partial EIV: bias columns are error-free)
+        print(f"  Solving TLS+bias ({self.tls_scaling.value}, partial EIV)...")
         try:
-            tls_bias_result = solve_tls_weighted(S_aug, W_total)
+            bias_col_indices = list(range(10, 16))
+            tls_bias_result = solve_tls_weighted(
+                S_aug, W_total,
+                scaling_mode=self.tls_scaling,
+                error_free_cols=bias_col_indices,
+            )
             results["TLS+bias"] = tls_bias_result.x[:10]
             bias_tls = tls_bias_result.x[10:]
         except Exception as e:
@@ -538,6 +553,7 @@ class ExcitationTrajectoryReplayNode:
                 "trimmed_frames": len(trimmed_frames),
                 "trim_start": self.trim_start,
                 "trim_end": self.trim_end,
+                "tls_scaling": self.tls_scaling.value,
             },
             "results": {method: {"params": params.tolist()} for method, params in results.items()},
             "bias": {
@@ -580,21 +596,23 @@ class ExcitationTrajectoryReplayNode:
             # Phase 2: Close gripper
             self.phase_close_gripper()
 
-        # Phase 3: Move to start pose (flange down)
-        self.phase_move_to_start()
+        accepted = False
+        while not accepted:
+            # Phase 3: Move to start pose (flange down)
+            self.phase_move_to_start()
 
-        # Phase 4: Replay and record
-        frames = self.phase_replay_and_record()
+            # Phase 4: Replay and record
+            frames = self.phase_replay_and_record()
 
-        # Phase 5: Identify
-        accepted = self.phase_identify(frames)
+            # Phase 5: Identify
+            accepted = self.phase_identify(frames)
+
+            if not accepted:
+                print("\n  Retrying from start pose...")
 
         print()
         print("=" * 60)
-        if accepted:
-            print("  COMPLETE - Parameters published")
-        else:
-            print("  COMPLETE - Parameters NOT published")
+        print("  COMPLETE - Parameters published")
         print("=" * 60)
 
         # Keep node alive for latched publishers

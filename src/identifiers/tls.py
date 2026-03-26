@@ -72,6 +72,7 @@ def solve_tls_weighted(
     A: NDArray[np.floating],
     b: NDArray[np.floating],
     scaling_mode: ScalingMode = ScalingMode.NOISE_VARIANCE,
+    error_free_cols: list[int] | None = None,
     regularization: float = 1e-10,
 ) -> TLSResult:
     """
@@ -80,10 +81,17 @@ def solve_tls_weighted(
     Minimizes: ||D @ [E | r] @ T||_F
     subject to: (A + E) @ x = b + r
 
+    When error_free_cols is specified, implements Partial EIV (Generalized TLS):
+    the indicated columns of A are treated as exact (no perturbation allowed).
+    Based on Van Huffel & Vandewalle (1989), Golub & Van Loan §6.3.4 Eq. 6.3.7.
+
     Args:
         A: Data matrix (m x n), m > n
         b: Observation vector (m,)
         scaling_mode: How to construct D and T matrices
+        error_free_cols: Column indices of A that are error-free (e.g. bias columns).
+            If specified, these columns are projected out before TLS, then their
+            parameters are recovered via OLS on the residual.
         regularization: Small value to prevent division by zero
 
     Returns:
@@ -97,6 +105,21 @@ def solve_tls_weighted(
         raise ValueError(f"Dimension mismatch: A is {m}x{n}, b has {len(b)} elements")
     if m <= n:
         raise ValueError(f"Need m > n for TLS, got m={m}, n={n}")
+
+    if error_free_cols is not None and len(error_free_cols) > 0:
+        return _solve_partial_eiv(A, b, scaling_mode, error_free_cols, regularization)
+
+    return _solve_full_tls(A, b, scaling_mode, regularization)
+
+
+def _solve_full_tls(
+    A: NDArray[np.floating],
+    b: NDArray[np.floating],
+    scaling_mode: ScalingMode,
+    regularization: float,
+) -> TLSResult:
+    """Standard (full) TLS: all columns of A are subject to error."""
+    m, n = A.shape
 
     # Form augmented matrix [A | b]
     b_col = b.reshape(-1, 1)
@@ -120,11 +143,6 @@ def solve_tls_weighted(
 
     condition_ok = sigma_n_C1 > sigma_n_plus_1
 
-    if not condition_ok:
-        # TLS problem may not have unique solution
-        # We still compute a solution but flag the condition
-        pass
-
     # Get V (right singular vectors) - last row of Vh
     v = Vh[-1, :]  # (n+1,)
 
@@ -136,18 +154,13 @@ def solve_tls_weighted(
         )
 
     # Compute TLS solution in SCALED space
-    # x_scaled_i = -v_i / v_{n+1}
     x_scaled = -v[:-1] / v[-1]
 
     # Convert back to ORIGINAL space using T
-    # From Golub-Van Loan Eq. (xi = -t_ii * V_{i,n+1} / (t_{n+1,n+1} * V_{n+1,n+1}))
-    # Since x_scaled = -v[:-1] / v[-1], and T is diagonal:
-    # x_original_i = T_ii * x_scaled_i / T_{n+1,n+1}
     T_diag = np.diag(T)
     x_original = (T_diag[:-1] / T_diag[-1]) * x_scaled
 
-    # Compile result
-    result = TLSResult(
+    return TLSResult(
         x=x_original,
         x_scaled=x_scaled,
         sigma_min=sigma_n_plus_1,
@@ -163,7 +176,80 @@ def solve_tls_weighted(
         },
     )
 
-    return result
+
+def _solve_partial_eiv(
+    A: NDArray[np.floating],
+    b: NDArray[np.floating],
+    scaling_mode: ScalingMode,
+    error_free_cols: list[int],
+    regularization: float,
+) -> TLSResult:
+    """Partial EIV (Generalized TLS): some columns of A are error-free.
+
+    Algorithm:
+    1. Split A into A1 (error-free) and A2 (error-prone)
+    2. Project out A1's influence: A2' = P_perp @ A2, b' = P_perp @ b
+       where P_perp = I - A1 @ A1† (orthogonal complement projector)
+    3. Solve standard TLS on [A2' | b']
+    4. Recover A1's parameters via OLS: x1 = A1† @ (b - A2 @ x2)
+
+    References:
+    - Van Huffel & Vandewalle (1989). Analysis and properties of the
+      generalized TLS problem. SIAM J. Matrix Anal. 10:294-315.
+    - Golub & Van Loan (2012). Matrix Computations §6.3.4, Eq. 6.3.7.
+    """
+    m, n = A.shape
+    ef_cols = sorted(error_free_cols)
+    ep_cols = [j for j in range(n) if j not in ef_cols]
+
+    if len(ep_cols) == 0:
+        raise ValueError("All columns are error-free; use OLS instead of TLS.")
+
+    A1 = A[:, ef_cols]  # error-free
+    A2 = A[:, ep_cols]  # error-prone
+
+    # Project out A1: P_perp = I - A1 @ A1†
+    A1_pinv = np.linalg.pinv(A1)
+    P_perp = np.eye(m) - A1 @ A1_pinv
+
+    A2_proj = P_perp @ A2
+    b_proj = P_perp @ b
+
+    # Solve reduced TLS on [A2' | b']
+    n2 = A2_proj.shape[1]
+    if A2_proj.shape[0] <= n2:
+        raise ValueError(
+            f"Projected system too small for TLS: {A2_proj.shape[0]} rows, {n2} cols"
+        )
+
+    reduced_result = _solve_full_tls(A2_proj, b_proj, scaling_mode, regularization)
+    x2 = reduced_result.x
+
+    # Recover error-free parameters: x1 = A1† @ (b - A2 @ x2)
+    x1 = A1_pinv @ (b - A2 @ x2)
+
+    # Reassemble in original column order
+    x_full = np.empty(n, dtype=np.float64)
+    x_full[ef_cols] = x1
+    x_full[ep_cols] = x2
+
+    return TLSResult(
+        x=x_full,
+        x_scaled=reduced_result.x_scaled,
+        sigma_min=reduced_result.sigma_min,
+        sigma_n=reduced_result.sigma_n,
+        condition_ok=reduced_result.condition_ok,
+        T=reduced_result.T,
+        D=reduced_result.D,
+        info={
+            **reduced_result.info,
+            "partial_eiv": True,
+            "error_free_cols": ef_cols,
+            "error_prone_cols": ep_cols,
+            "n_original": n,
+            "n_reduced": n2,
+        },
+    )
 
 
 def _construct_weighting_matrices(

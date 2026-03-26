@@ -25,6 +25,8 @@
   - グリッパ付き実機計測を 2 回実施（actual_TCP_force 起動時ゼロ化問題で推定精度不十分）
   - skip_teleop モードを簡素化済み（Phase 3a マウント姿勢フロー削除、開始姿勢で zero_ftsensor）
   - 推定手法を 4 並列化済み（OLS, TLS, OLS+bias, TLS+bias）
+  - Partial EIV 実装済み（バイアス列をエラーフリーに指定）
+  - 実機 5 試行の結果: OLS+bias m≈1.01kg (+6%), TLS+bias m≈1.36kg (+43%) — **OLS+bias を主推定手法に**
 - [ ] Step 7: 物体同定（差分法: φ_object = φ_total - φ_gripper）
 - [ ] Step 8: 120g 物体に対して正常な推定値を確認
 
@@ -39,5 +41,12 @@
   - `FULL` を削除（行の std 正規化に理論的根拠なし）
   - デフォルトを `NOISE_VARIANCE` に変更
 - [x] テスト追加: 全モードの無ノイズ復元テスト、ノイズ有りテスト（12/12 パス）
-- [ ] 実機データでの比較実験（OLS との乖離が改善されるか検証）
+- [x] Partial EIV 実装: バイアス列をエラーフリーに指定（Van Huffel & Vandewalle 1989）
+  - 射影法で A1 を除去 → 縮小 TLS → OLS で復元
+  - テスト 3 件追加（合成データで Full TLS より Partial EIV が高精度を確認）
+- [x] 実機 5 試行で検証: TLS+bias 質量 1.60→1.36 kg に改善（但し +43% の過大推定が残存）
+  - 重力列とバイアス列の残留相関が原因。OLS+bias (1.01 kg, +6%) が現時点で最良
+- [x] CLI 切替: `tls_scaling` ROS パラメータ追加（launch/rosrun で指定可能）
+- [x] 結果出力に `tls_scaling` メタデータ追加
+- [x] 同定ループ: n 選択時に再試行（start pose → replay → identify のループ）
 - [ ] 効果確認後、再帰的 TLS にもスケーリングを組み込む
