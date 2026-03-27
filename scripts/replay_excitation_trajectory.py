@@ -315,7 +315,7 @@ class ExcitationTrajectoryReplayNode:
         if np.max(error_deg) > 2.0:
             rospy.logwarn(f"Position error exceeds 2 deg: {np.max(error_deg):.2f}")
 
-        if self.skip_teleop:
+        if self.skip_teleop and self.standalone:
             self._zero_ftsensor()
             self._print_wrench("Wrench after zero_ftsensor (should be ~0):")
 

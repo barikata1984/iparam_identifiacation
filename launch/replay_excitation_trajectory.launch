@@ -26,7 +26,7 @@
     <arg name="cutoff_freq" default="10.0"/>
     <arg name="trim_start" default="0.0"/>
     <arg name="trim_end" default="inf"/>
-    <arg name="skip_teleop" default="false" doc="Skip teleop/gripper phases; zero F/T at start pose (for gripper-only identification)"/>
+    <arg name="skip_teleop" default="false" doc="Skip teleop/gripper phases; zero F/T at start pose in standalone mode (for gripper-only identification)"/>
     <arg name="tls_scaling" default="noise_variance" doc="TLS scaling mode: identity, data_variance, noise_variance"/>
     <arg name="gripper_calibration" default="$(find iparam_identification)/data/calibration/gripper.json" doc="Gripper calibration file for difference method. Set empty to disable."/>
     <arg name="standalone" default="true" doc="true=interactive CLI, false=ActionServer mode"/>
