@@ -65,11 +65,16 @@ from std_srvs.srv import Trigger  # noqa: E402
 from ur_control.fzi_cartesian_compliance_controller import CompliantController  # noqa: E402
 from utilities.tool0_kinematics import (  # noqa: E402
     JOINT_ORDER,
+    Tool0KinematicsCalculator,
     reorder_joint_state,
 )
 from identifiers.pipeline import IdentificationPipeline, IdentificationResult  # noqa: E402
 from identifiers.tls import ScalingMode  # noqa: E402
-from utilities.identification_utils import PARAM_NAMES, plot_kinematics_wrench  # noqa: E402
+from utilities.identification_utils import (  # noqa: E402
+    PARAM_NAMES,
+    plot_kinematics_wrench,
+    plot_replay_recording,
+)
 
 matplotlib.use("Agg")
 
@@ -117,6 +122,12 @@ class ExcitationTrajectoryReplayNode:
 
         # --- Robot control ---
         self.skip_teleop = rospy.get_param("~skip_teleop", False)
+
+        # --- Replay options ---
+        # Number of times the (periodic) excitation trajectory is replayed back-to-back.
+        self.n_laps = max(1, int(rospy.get_param("~n_laps", 3)))
+        # When False, skip phase 5+ (identification/publish) and only replay+record.
+        self.run_identification = rospy.get_param("~run_identification", True)
 
         # --- TLS scaling mode ---
         scaling_str = rospy.get_param("~tls_scaling", "noise_variance")
@@ -169,8 +180,12 @@ class ExcitationTrajectoryReplayNode:
             gravity=np.array(gravity_list),
         )
 
+        # --- Forward kinematics for gripper-tip (tool0) base-frame position ---
+        self._fk = Tool0KinematicsCalculator(acc_cutoff_freq=cutoff_freq)
+
         # --- Synchronized data recording ---
         self.recorded_frames: list[dict] = []
+        self._lap_start_times: list[float] = []
         self.is_recording = False
         self._ur_joint_names = set(JOINT_ORDER)
 
@@ -229,12 +244,16 @@ class ExcitationTrajectoryReplayNode:
         # Feed into pipeline (kinematics + regressor computed internally)
         self._pipeline.process_frame(q, v, t, wrench)
 
+        # Gripper-tip (tool0) position w.r.t. base frame
+        tip_pos = self._fk.tool0_position(q)
+
         # Also keep raw frame data for saving/plotting
         self.recorded_frames.append({
             "time": t,
             "joint_position": q.tolist(),
             "joint_velocity": v.tolist(),
             "wrench": wrench.tolist(),
+            "tool0_position": tip_pos.tolist(),
         })
 
     # =========================================================================
@@ -381,39 +400,149 @@ class ExcitationTrajectoryReplayNode:
         # Reset pipeline and frame buffer for new recording
         self._pipeline.reset()
         self.recorded_frames = []
+        self._lap_start_times = []
         self.is_recording = True
 
         self._arm.activate_joint_trajectory_controller()
 
-        print(f"  Executing trajectory ({self.duration:.1f}s)...")
-        self._arm.set_joint_trajectory(
-            target_time=self.duration,
-            trajectory=self.positions,
-            velocities=self.velocities,
-            accelerations=self.accelerations,
-            wait=False,
-        )
-
+        # The excitation trajectory is periodic (q[0]==q[-1], dq=0 at both ends),
+        # so it can be replayed back-to-back without repositioning between laps.
+        print(f"  Executing trajectory ({self.duration:.1f}s) x {self.n_laps} lap(s)...")
         rate = rospy.Rate(10)
-        start = rospy.Time.now().to_sec()
-        while not rospy.is_shutdown():
-            elapsed = rospy.Time.now().to_sec() - start
-            if elapsed >= self.duration + 0.5:
-                break
-            progress = min(elapsed / self.duration, 1.0)
-            sys.stdout.write(
-                f"\r  Progress: {progress * 100:5.1f}% | Frames: {self._pipeline.frame_count}"
+        for lap in range(self.n_laps):
+            print(f"\n  --- Lap {lap + 1}/{self.n_laps} ---")
+            self._arm.set_joint_trajectory(
+                target_time=self.duration,
+                trajectory=self.positions,
+                velocities=self.velocities,
+                accelerations=self.accelerations,
+                wait=False,
             )
-            sys.stdout.flush()
-            if feedback_cb:
-                feedback_cb(progress, self._pipeline.frame_count)
-            rate.sleep()
+
+            start = rospy.Time.now().to_sec()
+            self._lap_start_times.append(start)
+            while not rospy.is_shutdown():
+                elapsed = rospy.Time.now().to_sec() - start
+                if elapsed >= self.duration + 0.5:
+                    break
+                lap_progress = min(elapsed / self.duration, 1.0)
+                overall_progress = (lap + lap_progress) / self.n_laps
+                sys.stdout.write(
+                    f"\r  Lap {lap + 1}/{self.n_laps} | Progress: {overall_progress * 100:5.1f}%"
+                    f" | Frames: {self._pipeline.frame_count}"
+                )
+                sys.stdout.flush()
+                if feedback_cb:
+                    feedback_cb(overall_progress, self._pipeline.frame_count)
+                rate.sleep()
 
         self.is_recording = False
         n_frames = self._pipeline.frame_count
         print(f"\n  Recording complete: {n_frames} frames")
 
+        # Save + plot the trajectory-following measurements (F/T, tip pos & derivatives)
+        self._save_replay_recording()
+
         return n_frames
+
+    def _save_replay_recording(self) -> str | None:
+        """Save recorded F/T and gripper-tip (tool0) kinematics, then plot them.
+
+        Records per frame: F/T (6 components), tool0 position w.r.t. base, and the
+        1st/2nd numerical time derivatives of that position. Saves a .npz of the raw
+        arrays and a combined PNG plot to a timestamped results directory.
+        """
+        if len(self.recorded_frames) < 3:
+            rospy.logwarn("Not enough frames recorded to plot (need >= 3).")
+            return None
+
+        times = np.array([f["time"] for f in self.recorded_frames])
+        wrench = np.array([f["wrench"] for f in self.recorded_frames])
+        tip_pos = np.array([f["tool0_position"] for f in self.recorded_frames])
+
+        # Enforce strictly increasing time so np.gradient stays well-defined
+        order = np.argsort(times)
+        times, wrench, tip_pos = times[order], wrench[order], tip_pos[order]
+        keep = np.concatenate([[True], np.diff(times) > 0])
+        times, wrench, tip_pos = times[keep], wrench[keep], tip_pos[keep]
+
+        if len(times) < 3:
+            rospy.logwarn("Not enough distinct timestamps to differentiate.")
+            return None
+
+        # Numerical derivatives w.r.t. time (handles non-uniform sampling)
+        tip_vel = np.gradient(tip_pos, times, axis=0)
+        tip_acc = np.gradient(tip_vel, times, axis=0)
+
+        # Commanded/reference tip trajectory, tiled over the executed laps
+        ref_times, ref_pos, ref_vel, ref_acc = self._commanded_tip_reference()
+
+        results_dir = self._make_results_dir("replay_recording")
+        np.savez(
+            os.path.join(results_dir, "recording.npz"),
+            time=times,
+            wrench=wrench,
+            tip_position=tip_pos,
+            tip_velocity=tip_vel,
+            tip_acceleration=tip_acc,
+            ref_time=ref_times if ref_times is not None else np.array([]),
+            ref_tip_position=ref_pos if ref_pos is not None else np.empty((0, 3)),
+            ref_tip_velocity=ref_vel if ref_vel is not None else np.empty((0, 3)),
+            ref_tip_acceleration=ref_acc if ref_acc is not None else np.empty((0, 3)),
+        )
+        plot_replay_recording(
+            times, wrench, tip_pos, tip_vel, tip_acc, results_dir,
+            ref_times=ref_times, ref_pos=ref_pos, ref_vel=ref_vel, ref_acc=ref_acc,
+        )
+        print(f"  Recording data + plot saved to: {results_dir}")
+        return results_dir
+
+    def _commanded_tip_reference(self):
+        """Build the commanded tip (tool0) reference tiled over executed laps.
+
+        The single-period reference position is FK(q_commanded); velocity and
+        acceleration are its numerical time derivatives (same processing as the
+        measured side, so the overlay reflects tracking error, not method).
+        NaN separators are inserted between laps so gaps are not drawn connected.
+
+        Returns:
+            (ref_times, ref_pos, ref_vel, ref_acc) wall-clock-aligned arrays, or
+            (None, None, None, None) if lap timing is unavailable.
+        """
+        if not self._lap_start_times:
+            return None, None, None, None
+
+        t_rel = self.times - self.times[0]
+        pos_period = np.array([self._fk.tool0_position(q) for q in self.positions])
+        vel_period = np.gradient(pos_period, t_rel, axis=0)
+        acc_period = np.gradient(vel_period, t_rel, axis=0)
+
+        nan_t = np.array([np.nan])
+        nan_v = np.full((1, 3), np.nan)
+        t_parts, p_parts, v_parts, a_parts = [], [], [], []
+        for s in self._lap_start_times:
+            t_parts += [s + t_rel, nan_t]
+            p_parts += [pos_period, nan_v]
+            v_parts += [vel_period, nan_v]
+            a_parts += [acc_period, nan_v]
+
+        return (
+            np.concatenate(t_parts),
+            np.concatenate(p_parts),
+            np.concatenate(v_parts),
+            np.concatenate(a_parts),
+        )
+
+    def _make_results_dir(self, prefix: str) -> str:
+        """Create and return a timestamped directory under the package's results/."""
+        import rospkg
+
+        rospack = rospkg.RosPack()
+        package_path = rospack.get_path("iparam_identification")
+        timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        results_dir = os.path.join(package_path, "results", f"{prefix}_{timestamp_str}")
+        os.makedirs(results_dir, exist_ok=True)
+        return results_dir
 
     # =========================================================================
     # Phase 5: Identify inertial parameters
@@ -687,18 +816,28 @@ class ExcitationTrajectoryReplayNode:
             self.phase_teleop_grasp()
             self.phase_close_gripper()
 
-        result = None
-        while result is None:
+        if not self.run_identification:
+            # Phase 5+ (identification/publish) skipped: replay + record only.
             self.phase_move_to_start()
-            self.phase_replay_and_record()
-            result = self.phase_identify(interactive=True)
-            if result is None:
-                print("\n  Retrying from start pose...")
+            n_frames = self.phase_replay_and_record()
+            print()
+            print("=" * 60)
+            print("  PHASE 5+ SKIPPED (run_identification:=false)")
+            print(f"  Replayed {self.n_laps} lap(s), recorded {n_frames} frames (not identified).")
+            print("=" * 60)
+        else:
+            result = None
+            while result is None:
+                self.phase_move_to_start()
+                self.phase_replay_and_record()
+                result = self.phase_identify(interactive=True)
+                if result is None:
+                    print("\n  Retrying from start pose...")
 
-        print()
-        print("=" * 60)
-        print("  COMPLETE - Parameters published")
-        print("=" * 60)
+            print()
+            print("=" * 60)
+            print("  COMPLETE - Parameters published")
+            print("=" * 60)
 
         print("  Node alive (latched topics active). Press Ctrl+C to exit.")
         rospy.spin()

@@ -30,6 +30,8 @@
     <arg name="tls_scaling" default="noise_variance" doc="TLS scaling mode: identity, data_variance, noise_variance"/>
     <arg name="gripper_calibration" default="$(find iparam_identification)/data/calibration/gripper.json" doc="Gripper calibration file for difference method. Set empty to disable."/>
     <arg name="standalone" default="true" doc="true=interactive CLI, false=ActionServer mode"/>
+    <arg name="n_laps" default="3" doc="Number of back-to-back replays of the periodic excitation trajectory in phase 4"/>
+    <arg name="run_identification" default="false" doc="true=run phase 5+ (identify/publish); false=replay+record only"/>
     <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
     <arg name="teleop_config" default="$(find osx_bilateral)/configs/teleop.yaml"/>
 
@@ -69,5 +71,7 @@
         <param name="tls_scaling" value="$(arg tls_scaling)"/>
         <param name="gripper_calibration" value="$(arg gripper_calibration)"/>
         <param name="standalone" value="$(arg standalone)"/>
+        <param name="n_laps" value="$(arg n_laps)"/>
+        <param name="run_identification" value="$(arg run_identification)"/>
     </node>
 </launch>

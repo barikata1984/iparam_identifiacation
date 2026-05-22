@@ -180,6 +180,21 @@ class Tool0KinematicsCalculator:
 
         return result
 
+    def tool0_position(self, q: np.ndarray) -> np.ndarray:
+        """Return the tool0 origin position expressed in the base frame.
+
+        Uses position-only forward kinematics (independent of the velocity/
+        acceleration differentiator state).
+
+        Args:
+            q: Joint positions [rad], shape (6,).
+
+        Returns:
+            (3,) position [m] of tool0 w.r.t. the base frame.
+        """
+        pin.framesForwardKinematics(self.model, self.data, q)
+        return self.data.oMf[self.tool0_id].translation.copy()
+
     def reset(self):
         """Reset the numerical differentiator state."""
         self.acc_differentiator.reset()
