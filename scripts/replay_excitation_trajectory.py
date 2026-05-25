@@ -74,6 +74,8 @@ from utilities.identification_utils import (  # noqa: E402
     PARAM_NAMES,
     plot_kinematics_wrench,
     plot_replay_recording,
+    plot_velocity_acceleration_comparison,
+    plot_wrist3_torque,
 )
 
 matplotlib.use("Agg")
@@ -128,6 +130,8 @@ class ExcitationTrajectoryReplayNode:
         self.n_laps = max(1, int(rospy.get_param("~n_laps", 3)))
         # When False, skip phase 5+ (identification/publish) and only replay+record.
         self.run_identification = rospy.get_param("~run_identification", True)
+        # When False, never call zero_ftsensor (record raw, un-tared F/T).
+        self.zero_ftsensor_enabled = rospy.get_param("~zero_ftsensor", True)
 
         # --- TLS scaling mode ---
         scaling_str = rospy.get_param("~tls_scaling", "noise_variance")
@@ -244,8 +248,9 @@ class ExcitationTrajectoryReplayNode:
         # Feed into pipeline (kinematics + regressor computed internally)
         self._pipeline.process_frame(q, v, t, wrench)
 
-        # Gripper-tip (tool0) position w.r.t. base frame
+        # Gripper-tip (tool0) position and Jacobian-based velocity w.r.t. base frame
         tip_pos = self._fk.tool0_position(q)
+        tip_vel_jac = self._fk.tool0_velocity(q, v)
 
         # Also keep raw frame data for saving/plotting
         self.recorded_frames.append({
@@ -254,6 +259,7 @@ class ExcitationTrajectoryReplayNode:
             "joint_velocity": v.tolist(),
             "wrench": wrench.tolist(),
             "tool0_position": tip_pos.tolist(),
+            "tool0_velocity": tip_vel_jac.tolist(),
         })
 
     # =========================================================================
@@ -347,7 +353,12 @@ class ExcitationTrajectoryReplayNode:
     # =========================================================================
 
     def _zero_ftsensor(self):
-        """Call zero_ftsensor service."""
+        """Call zero_ftsensor service (no-op if disabled via ~zero_ftsensor:=false)."""
+        if not self.zero_ftsensor_enabled:
+            rospy.logwarn("zero_ftsensor disabled (~zero_ftsensor=false): skipping F/T zeroing.")
+            print("  [zero_ftsensor DISABLED] skipping F/T sensor zeroing (recording raw wrench).")
+            return
+
         service_name = "/ur_hardware_interface/zero_ftsensor"
         print(f"  Calling {service_name}...")
         try:
@@ -459,20 +470,36 @@ class ExcitationTrajectoryReplayNode:
         times = np.array([f["time"] for f in self.recorded_frames])
         wrench = np.array([f["wrench"] for f in self.recorded_frames])
         tip_pos = np.array([f["tool0_position"] for f in self.recorded_frames])
+        tip_vel_jac = np.array([f["tool0_velocity"] for f in self.recorded_frames])
+        # Joint position/velocity (order = JOINT_ORDER, so index 5 = wrist_3) for
+        # correlating measured torque against joint-velocity sign reversals.
+        joint_pos = np.array([f["joint_position"] for f in self.recorded_frames])
+        joint_vel = np.array([f["joint_velocity"] for f in self.recorded_frames])
 
         # Enforce strictly increasing time so np.gradient stays well-defined
         order = np.argsort(times)
-        times, wrench, tip_pos = times[order], wrench[order], tip_pos[order]
+        times, wrench, tip_pos, tip_vel_jac, joint_pos, joint_vel = (
+            times[order], wrench[order], tip_pos[order], tip_vel_jac[order],
+            joint_pos[order], joint_vel[order],
+        )
         keep = np.concatenate([[True], np.diff(times) > 0])
-        times, wrench, tip_pos = times[keep], wrench[keep], tip_pos[keep]
+        times, wrench, tip_pos, tip_vel_jac, joint_pos, joint_vel = (
+            times[keep], wrench[keep], tip_pos[keep], tip_vel_jac[keep],
+            joint_pos[keep], joint_vel[keep],
+        )
 
         if len(times) < 3:
             rospy.logwarn("Not enough distinct timestamps to differentiate.")
             return None
 
-        # Numerical derivatives w.r.t. time (handles non-uniform sampling)
-        tip_vel = np.gradient(tip_pos, times, axis=0)
-        tip_acc = np.gradient(tip_vel, times, axis=0)
+        # Velocity: numerical (d/dt of position) and Jacobian (J·q̇, already recorded).
+        tip_vel_num = np.gradient(tip_pos, times, axis=0)
+        # Acceleration: 2nd numerical derivative of position (num) and 1st numerical
+        # derivative of the Jacobian velocity (jac). No measured joint accel exists,
+        # so both require at least one differentiation; the Jacobian path needs one
+        # fewer than the position double-difference.
+        tip_acc_num = np.gradient(tip_vel_num, times, axis=0)
+        tip_acc_jac = np.gradient(tip_vel_jac, times, axis=0)
 
         # Commanded/reference tip trajectory, tiled over the executed laps
         ref_times, ref_pos, ref_vel, ref_acc = self._commanded_tip_reference()
@@ -482,27 +509,42 @@ class ExcitationTrajectoryReplayNode:
             os.path.join(results_dir, "recording.npz"),
             time=times,
             wrench=wrench,
+            joint_position=joint_pos,
+            joint_velocity=joint_vel,
+            joint_names=np.array(JOINT_ORDER),
             tip_position=tip_pos,
-            tip_velocity=tip_vel,
-            tip_acceleration=tip_acc,
+            tip_velocity_numerical=tip_vel_num,
+            tip_velocity_jacobian=tip_vel_jac,
+            tip_acceleration_numerical=tip_acc_num,
+            tip_acceleration_jacobian=tip_acc_jac,
             ref_time=ref_times if ref_times is not None else np.array([]),
             ref_tip_position=ref_pos if ref_pos is not None else np.empty((0, 3)),
             ref_tip_velocity=ref_vel if ref_vel is not None else np.empty((0, 3)),
             ref_tip_acceleration=ref_acc if ref_acc is not None else np.empty((0, 3)),
         )
+        # Overview uses the Jacobian-based velocity (J·q̇) and its derivative for
+        # acceleration (lower noise than the position double-difference).
         plot_replay_recording(
-            times, wrench, tip_pos, tip_vel, tip_acc, results_dir,
+            times, wrench, tip_pos, tip_vel_jac, tip_acc_jac, results_dir,
             ref_times=ref_times, ref_pos=ref_pos, ref_vel=ref_vel, ref_acc=ref_acc,
         )
-        print(f"  Recording data + plot saved to: {results_dir}")
+        plot_velocity_acceleration_comparison(
+            times, tip_vel_num, tip_vel_jac, tip_acc_num, tip_acc_jac,
+            ref_times, ref_vel, ref_acc, results_dir,
+        )
+        # wrist_3 position vs Tz (Coulomb-friction check; Tz should switch at the
+        # wrist_3 position turning points where joint velocity reverses).
+        w3_idx = JOINT_ORDER.index("wrist_3_joint")
+        plot_wrist3_torque(times, joint_pos[:, w3_idx], wrench[:, 5], results_dir)
+        print(f"  Recording data + plots saved to: {results_dir}")
         return results_dir
 
     def _commanded_tip_reference(self):
         """Build the commanded tip (tool0) reference tiled over executed laps.
 
-        The single-period reference position is FK(q_commanded); velocity and
-        acceleration are its numerical time derivatives (same processing as the
-        measured side, so the overlay reflects tracking error, not method).
+        The single-period reference is computed analytically from the commanded
+        joint trajectory (no numerical differentiation): position FK(q), velocity
+        J(q)·q̇, and classical acceleration from (q, q̇, q̈) using the commanded ddq.
         NaN separators are inserted between laps so gaps are not drawn connected.
 
         Returns:
@@ -514,8 +556,16 @@ class ExcitationTrajectoryReplayNode:
 
         t_rel = self.times - self.times[0]
         pos_period = np.array([self._fk.tool0_position(q) for q in self.positions])
-        vel_period = np.gradient(pos_period, t_rel, axis=0)
-        acc_period = np.gradient(vel_period, t_rel, axis=0)
+        vel_period = np.array([
+            self._fk.tool0_velocity(q, dq)
+            for q, dq in zip(self.positions, self.velocities, strict=True)
+        ])
+        acc_period = np.array([
+            self._fk.tool0_acceleration(q, dq, ddq)
+            for q, dq, ddq in zip(
+                self.positions, self.velocities, self.accelerations, strict=True
+            )
+        ])
 
         nan_t = np.array([np.nan])
         nan_v = np.full((1, 3), np.nan)

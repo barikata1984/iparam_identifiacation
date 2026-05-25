@@ -32,6 +32,7 @@
     <arg name="standalone" default="true" doc="true=interactive CLI, false=ActionServer mode"/>
     <arg name="n_laps" default="3" doc="Number of back-to-back replays of the periodic excitation trajectory in phase 4"/>
     <arg name="run_identification" default="false" doc="true=run phase 5+ (identify/publish); false=replay+record only"/>
+    <arg name="zero_ftsensor" default="true" doc="true=zero the F/T sensor before replay; false=record raw, un-tared wrench"/>
     <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
     <arg name="teleop_config" default="$(find osx_bilateral)/configs/teleop.yaml"/>
 
@@ -73,5 +74,6 @@
         <param name="standalone" value="$(arg standalone)"/>
         <param name="n_laps" value="$(arg n_laps)"/>
         <param name="run_identification" value="$(arg run_identification)"/>
+        <param name="zero_ftsensor" value="$(arg zero_ftsensor)"/>
     </node>
 </launch>

@@ -195,6 +195,49 @@ class Tool0KinematicsCalculator:
         pin.framesForwardKinematics(self.model, self.data, q)
         return self.data.oMf[self.tool0_id].translation.copy()
 
+    def tool0_velocity(self, q: np.ndarray, v: np.ndarray) -> np.ndarray:
+        """Return the base-frame linear velocity of tool0 via the Jacobian.
+
+        Computes v = J(q)·q̇ without any numerical differentiation, using
+        pinocchio's frame velocity in the LOCAL_WORLD_ALIGNED frame; its linear
+        part equals d/dt of the tool0 origin position expressed in the base frame.
+
+        Args:
+            q: Joint positions [rad], shape (6,).
+            v: Joint velocities [rad/s], shape (6,) (e.g. from /joint_states).
+
+        Returns:
+            (3,) linear velocity [m/s] of tool0 w.r.t. the base frame.
+        """
+        pin.forwardKinematics(self.model, self.data, q, v)
+        pin.updateFramePlacements(self.model, self.data)
+        return pin.getFrameVelocity(
+            self.model, self.data, self.tool0_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
+        ).linear.copy()
+
+    def tool0_acceleration(self, q: np.ndarray, v: np.ndarray, a: np.ndarray) -> np.ndarray:
+        """Return the base-frame classical linear acceleration of tool0.
+
+        Computes the closed-form classical (Cartesian) acceleration from joint
+        position/velocity/acceleration via pinocchio; the LOCAL_WORLD_ALIGNED linear
+        part equals d²/dt² of the tool0 origin position expressed in the base frame.
+        Requires the joint acceleration `a` (e.g. the commanded ddq); no numerical
+        differentiation is performed inside this method.
+
+        Args:
+            q: Joint positions [rad], shape (6,).
+            v: Joint velocities [rad/s], shape (6,).
+            a: Joint accelerations [rad/s²], shape (6,).
+
+        Returns:
+            (3,) classical linear acceleration [m/s²] of tool0 w.r.t. the base frame.
+        """
+        pin.forwardKinematics(self.model, self.data, q, v, a)
+        pin.updateFramePlacements(self.model, self.data)
+        return pin.getFrameClassicalAcceleration(
+            self.model, self.data, self.tool0_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
+        ).linear.copy()
+
     def reset(self):
         """Reset the numerical differentiator state."""
         self.acc_differentiator.reset()
