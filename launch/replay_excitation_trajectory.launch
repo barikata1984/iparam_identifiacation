@@ -22,7 +22,8 @@
 
     <!-- ========== Arguments ========== -->
     <arg name="trajectory" default="$(find iparam_identification)/data/trajectories/excitation_trajectory.json"/>
-    <arg name="wrench_topic" default="/wrench"/>
+    <arg name="ft_sensor" default="internal" doc="F/T sensor source: internal (UR built-in /wrench, RTDE-clocked) or ft300s (external Robotiq FT 300-S via /robotiq_ft_wrench_synced; requires ft300_sensor.launch running)"/>
+    <arg name="wrench_topic" default="" doc="Override wrench topic (default chosen by ft_sensor: internal→/wrench, ft300s→/robotiq_ft_wrench_synced)"/>
     <arg name="cutoff_freq" default="10.0"/>
     <arg name="trim_start" default="0.0"/>
     <arg name="trim_end" default="inf"/>
@@ -30,7 +31,8 @@
     <arg name="tls_scaling" default="noise_variance" doc="TLS scaling mode: identity, data_variance, noise_variance"/>
     <arg name="gripper_calibration" default="$(find iparam_identification)/data/calibration/gripper.json" doc="Gripper calibration file for difference method. Set empty to disable."/>
     <arg name="standalone" default="true" doc="true=interactive CLI, false=ActionServer mode"/>
-    <arg name="n_laps" default="3" doc="Number of back-to-back replays of the periodic excitation trajectory in phase 4"/>
+    <arg name="n_laps" default="1" doc="Number of back-to-back replays of the periodic excitation trajectory in phase 4"/>
+    <arg name="speed" default="1.0" doc="Playback speed multiplier (0.1 = 10% speed, 1.0 = original). Velocities and accelerations are scaled accordingly."/>
     <arg name="run_identification" default="false" doc="true=run phase 5+ (identify/publish); false=replay+record only"/>
     <arg name="zero_ftsensor" default="true" doc="true=zero the F/T sensor before replay; false=record raw, un-tared wrench"/>
     <arg name="leader_port" default="/dev/ttyUSB0" doc="Dynamixel leader arm serial port"/>
@@ -64,6 +66,7 @@
     <node pkg="iparam_identification" type="replay_excitation_trajectory.py"
           name="batch_identifier" output="screen" required="true">
         <param name="trajectory_path" value="$(arg trajectory)"/>
+        <param name="ft_sensor" value="$(arg ft_sensor)"/>
         <param name="wrench_topic" value="$(arg wrench_topic)"/>
         <param name="cutoff_freq" value="$(arg cutoff_freq)"/>
         <param name="trim_start" value="$(arg trim_start)"/>
@@ -73,6 +76,7 @@
         <param name="gripper_calibration" value="$(arg gripper_calibration)"/>
         <param name="standalone" value="$(arg standalone)"/>
         <param name="n_laps" value="$(arg n_laps)"/>
+        <param name="speed" value="$(arg speed)"/>
         <param name="run_identification" value="$(arg run_identification)"/>
         <param name="zero_ftsensor" value="$(arg zero_ftsensor)"/>
     </node>

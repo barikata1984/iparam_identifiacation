@@ -89,10 +89,11 @@ class IdentificationPipeline:
     via identify(). All kinematics and regressor computation is internal.
 
     Args:
-        urdf_path: Path to UR5e URDF for kinematics.
+        urdf_path: Path to URDF for kinematics.
         tls_scaling: Scaling mode for TLS solver.
         acc_cutoff_freq: Cutoff frequency for acceleration low-pass filter [Hz].
         gravity: Gravity vector in base frame [m/s²].
+        frame_name: Frame at which to compute kinematics / regressor (default: "tool0").
     """
 
     def __init__(
@@ -101,13 +102,14 @@ class IdentificationPipeline:
         tls_scaling: ScalingMode = ScalingMode.NOISE_VARIANCE,
         acc_cutoff_freq: float = 10.0,
         gravity: NDArray[np.floating] | None = None,
+        frame_name: str = "tool0",
     ):
         self._tls_scaling = tls_scaling
         self._gravity = (
             np.array(gravity) if gravity is not None else np.array([0.0, 0.0, -9.81])
         )
         self._kinematics = Tool0KinematicsCalculator(
-            urdf_path=urdf_path, acc_cutoff_freq=acc_cutoff_freq
+            urdf_path=urdf_path, acc_cutoff_freq=acc_cutoff_freq, frame_name=frame_name,
         )
         self._frames: list[_Frame] = []
 

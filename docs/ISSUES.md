@@ -18,6 +18,16 @@ UR5e 内蔵 F/T (`actual_TCP_force`) の確度は力 ±4 N / トルク ±0.3 Nm�
   (c) 励起の角加速度を上げる (wrist_3 摩擦・安全に注意)。
 - 詳細: `docs/LOGS/log_ft_sensor_behavior.md`
 
+## I-12: FT 300-S 使用時に OLS+bias total mass が物体質量にしかならない
+
+パイプラインは合成データで完璧に動作(OLS+bias 誤差 0). 実データでのみ
+total mass が ~0.34 kg(期待 ~1.27 kg = gripper + object). bias が
+グリッパ重力を過剰に吸収している疑い.
+
+- 条件数(17.1), 時間同期は問題なし
+- 符号規約も start pose での静的比較で確認済み(反転不要)
+- 詳細: `docs/LOGS/log_ft300s_integration.md`
+
 ## I-10: cmodel_urcap_driver の無音死を起動時に検出できない
 
 `connect_real_robot.launch` 起動時に Polyscope 側 URCap が READY でないと

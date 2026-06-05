@@ -30,7 +30,7 @@ DEFAULT_URDF_PATH = (
 
 class Tool0KinematicsCalculator:
     """
-    Computes classical velocities and accelerations at the tool0 frame.
+    Computes classical velocities and accelerations at a specified frame.
 
     This class uses pinocchio for forward kinematics and provides classical
     (not spatial) accelerations suitable for inertial parameter identification.
@@ -42,12 +42,17 @@ class Tool0KinematicsCalculator:
     data : pinocchio.Data
         The pinocchio data structure for computations
     tool0_id : int
-        Frame ID of tool0 in the pinocchio model
+        Frame ID of the target frame in the pinocchio model
     acc_differentiator : NumericalDifferentiator
         Differentiator for computing joint accelerations from velocities
     """
 
-    def __init__(self, urdf_path: str = DEFAULT_URDF_PATH, acc_cutoff_freq: float = 10.0):
+    def __init__(
+        self,
+        urdf_path: str = DEFAULT_URDF_PATH,
+        acc_cutoff_freq: float = 10.0,
+        frame_name: str = "tool0",
+    ):
         """
         Initialize the calculator.
 
@@ -57,10 +62,15 @@ class Tool0KinematicsCalculator:
             Path to the URDF file
         acc_cutoff_freq : float
             Cutoff frequency for acceleration low-pass filter (Hz)
+        frame_name : str
+            Name of the frame to compute kinematics at (default: "tool0")
         """
         self.model = pin.buildModelFromUrdf(urdf_path)
         self.data = self.model.createData()
-        self.tool0_id = self.model.getFrameId("tool0")
+        self.tool0_id = self.model.getFrameId(frame_name)
+        self._nq = self.model.nq
+        self._nv = self.model.nv
+        self._n_actuated = 6  # UR joints only
 
         # Numerical differentiator for joint acceleration (velocity -> acceleration)
         self.acc_differentiator = NumericalDifferentiator(cutoff_freq=acc_cutoff_freq)
@@ -93,8 +103,16 @@ class Tool0KinematicsCalculator:
         # Compute joint acceleration via numerical differentiation
         a = self.acc_differentiator.update(v, t)
 
+        # Pad to full model size if URDF has extra joints (e.g. gripper)
+        q_full = np.zeros(self._nq)
+        v_full = np.zeros(self._nv)
+        a_full = np.zeros(self._nv)
+        q_full[: self._n_actuated] = q
+        v_full[: self._n_actuated] = v
+        a_full[: self._n_actuated] = a
+
         # Forward kinematics with position, velocity, and acceleration
-        pin.forwardKinematics(self.model, self.data, q, v, a)
+        pin.forwardKinematics(self.model, self.data, q_full, v_full, a_full)
         pin.updateFramePlacements(self.model, self.data)
 
         # Get spatial velocity (twist) in LOCAL frame
@@ -192,37 +210,33 @@ class Tool0KinematicsCalculator:
         Returns:
             (3,) position [m] of tool0 w.r.t. the base frame.
         """
-        pin.framesForwardKinematics(self.model, self.data, q)
+        q_full = np.zeros(self._nq)
+        q_full[: self._n_actuated] = q
+        pin.framesForwardKinematics(self.model, self.data, q_full)
         return self.data.oMf[self.tool0_id].translation.copy()
 
     def tool0_velocity(self, q: np.ndarray, v: np.ndarray) -> np.ndarray:
-        """Return the base-frame linear velocity of tool0 via the Jacobian.
-
-        Computes v = J(q)·q̇ without any numerical differentiation, using
-        pinocchio's frame velocity in the LOCAL_WORLD_ALIGNED frame; its linear
-        part equals d/dt of the tool0 origin position expressed in the base frame.
+        """Return the base-frame linear velocity of the target frame via the Jacobian.
 
         Args:
             q: Joint positions [rad], shape (6,).
-            v: Joint velocities [rad/s], shape (6,) (e.g. from /joint_states).
+            v: Joint velocities [rad/s], shape (6,).
 
         Returns:
-            (3,) linear velocity [m/s] of tool0 w.r.t. the base frame.
+            (3,) linear velocity [m/s] w.r.t. the base frame.
         """
-        pin.forwardKinematics(self.model, self.data, q, v)
+        q_full = np.zeros(self._nq)
+        v_full = np.zeros(self._nv)
+        q_full[: self._n_actuated] = q
+        v_full[: self._n_actuated] = v
+        pin.forwardKinematics(self.model, self.data, q_full, v_full)
         pin.updateFramePlacements(self.model, self.data)
         return pin.getFrameVelocity(
             self.model, self.data, self.tool0_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
         ).linear.copy()
 
     def tool0_acceleration(self, q: np.ndarray, v: np.ndarray, a: np.ndarray) -> np.ndarray:
-        """Return the base-frame classical linear acceleration of tool0.
-
-        Computes the closed-form classical (Cartesian) acceleration from joint
-        position/velocity/acceleration via pinocchio; the LOCAL_WORLD_ALIGNED linear
-        part equals d²/dt² of the tool0 origin position expressed in the base frame.
-        Requires the joint acceleration `a` (e.g. the commanded ddq); no numerical
-        differentiation is performed inside this method.
+        """Return the base-frame classical linear acceleration of the target frame.
 
         Args:
             q: Joint positions [rad], shape (6,).
@@ -230,9 +244,15 @@ class Tool0KinematicsCalculator:
             a: Joint accelerations [rad/s²], shape (6,).
 
         Returns:
-            (3,) classical linear acceleration [m/s²] of tool0 w.r.t. the base frame.
+            (3,) classical linear acceleration [m/s²] w.r.t. the base frame.
         """
-        pin.forwardKinematics(self.model, self.data, q, v, a)
+        q_full = np.zeros(self._nq)
+        v_full = np.zeros(self._nv)
+        a_full = np.zeros(self._nv)
+        q_full[: self._n_actuated] = q
+        v_full[: self._n_actuated] = v
+        a_full[: self._n_actuated] = a
+        pin.forwardKinematics(self.model, self.data, q_full, v_full, a_full)
         pin.updateFramePlacements(self.model, self.data)
         return pin.getFrameClassicalAcceleration(
             self.model, self.data, self.tool0_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED

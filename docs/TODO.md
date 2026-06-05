@@ -34,6 +34,19 @@
 
 ---
 
+## FT 300-S 統合
+
+- [x] `ft_sensor:=ft300s` 時に regressor を `robotiq_ft_frame_id` で計算
+- [x] URDF フレーム整合(全フレームを tool0 方向に揃え)
+- [x] 速度スケーリング(`speed` パラメータ)
+- [x] pinocchio 用 URDF 生成(`data/urdf/ur5e_ft300s_robotiq85.urdf`)
+- [x] 合成データでパイプライン正常動作を確認(OLS+bias 誤差 0)
+- [ ] 実データで total mass が ~0.34 にしかならない原因の特定
+- [ ] ノイズ+オフセット付き合成データで推定限界を調査
+- [ ] `n_laps:=3` で再試行
+
+---
+
 ## TLS スケーリング改善（I-3）
 
 - [x] 文献調査: WTLS 重み行列の理論的根拠（26論文、`docs/SURVEYS/wtls_scaling_matrix.md`）

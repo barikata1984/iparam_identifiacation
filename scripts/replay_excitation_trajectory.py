@@ -60,6 +60,7 @@ from sensor_msgs.msg import JointState  # noqa: E402
 from src.core.terminal import check_enter_pressed  # noqa: E402
 from src.teleop.config import TeleopConfig  # noqa: E402
 from src.teleop.factory import create_teleop_components  # noqa: E402
+from robotiq_ft_sensor.srv import sensor_accessor  # noqa: E402
 from std_msgs.msg import Bool, Float64MultiArray  # noqa: E402
 from std_srvs.srv import Trigger  # noqa: E402
 from ur_control.fzi_cartesian_compliance_controller import CompliantController  # noqa: E402
@@ -72,8 +73,10 @@ from identifiers.pipeline import IdentificationPipeline, IdentificationResult  #
 from identifiers.tls import ScalingMode  # noqa: E402
 from utilities.identification_utils import (  # noqa: E402
     PARAM_NAMES,
+    plot_joint_currents,
     plot_kinematics_wrench,
     plot_replay_recording,
+    plot_tz_via_drive_joint,
     plot_velocity_acceleration_comparison,
     plot_wrist3_torque,
 )
@@ -83,6 +86,17 @@ matplotlib.use("Agg")
 # Default paths
 DEFAULT_TRAJECTORY = str(IPARAM_ROOT / "data" / "trajectories" / "excitation_trajectory.json")
 DEFAULT_GRIPPER_CAL = str(IPARAM_ROOT / "data" / "calibration" / "gripper.json")
+
+# URDF / frame config per FT sensor kind
+_FT_SENSOR_CONFIG = {
+    "internal": {
+        "frame": "tool0",
+    },
+    "ft300s": {
+        "urdf": str(IPARAM_ROOT / "data" / "urdf" / "ur5e_ft300s_robotiq85.urdf"),
+        "frame": "robotiq_ft_frame_id",
+    },
+}
 
 
 class ExcitationTrajectoryReplayNode:
@@ -99,7 +113,15 @@ class ExcitationTrajectoryReplayNode:
 
         # --- ROS parameters ---
         trajectory_path = rospy.get_param("~trajectory_path", DEFAULT_TRAJECTORY)
-        self.wrench_topic = rospy.get_param("~wrench_topic", "/wrench")
+        # F/T sensor source: "internal" (UR built-in /wrench, RTDE-clocked) or
+        # "ft300s" (external Robotiq FT 300-S, PC-direct, timeshifted to RTDE
+        # via /robotiq_ft_wrench_synced — start ft300_sensor.launch separately).
+        self.ft_sensor_kind = rospy.get_param("~ft_sensor", "internal")
+        default_wrench_topic = {
+            "internal": "/wrench",
+            "ft300s": "/robotiq_ft_wrench_synced",
+        }.get(self.ft_sensor_kind, "/wrench")
+        self.wrench_topic = rospy.get_param("~wrench_topic", "") or default_wrench_topic
         self.trim_start = float(rospy.get_param("~trim_start", 0.0))
         self.trim_end = float(rospy.get_param("~trim_end", "inf"))
 
@@ -121,6 +143,19 @@ class ExcitationTrajectoryReplayNode:
         rospy.loginfo(f"  Duration: {self.duration}s, Steps: {len(trajectory)}, dt: {self.dt}s")
         rospy.loginfo(f"  Trim window: [{self.trim_start}s, {self.trim_end}s]")
         rospy.loginfo(f"  Condition number: {metadata.get('condition_number', 'N/A')}")
+        rospy.loginfo(f"  F/T sensor: {self.ft_sensor_kind} (topic: {self.wrench_topic})")
+
+        # --- Speed scaling ---
+        self.speed = float(rospy.get_param("~speed", 1.0))
+        if self.speed != 1.0:
+            self.duration /= self.speed
+            self.dt /= self.speed
+            self.times = self.times[0] + (self.times - self.times[0]) / self.speed
+            self.velocities *= self.speed
+            self.accelerations *= self.speed ** 2
+            rospy.loginfo(
+                f"  Speed: {self.speed}x (scaled duration: {self.duration:.1f}s)"
+            )
 
         # --- Robot control ---
         self.skip_teleop = rospy.get_param("~skip_teleop", False)
@@ -176,13 +211,19 @@ class ExcitationTrajectoryReplayNode:
             self._arm = self.robot._arm
 
         # --- IdentificationPipeline ---
+        ft_cfg = _FT_SENSOR_CONFIG.get(self.ft_sensor_kind, _FT_SENSOR_CONFIG["internal"])
         cutoff_freq = rospy.get_param("~cutoff_freq", 10.0)
         gravity_list = rospy.get_param("~gravity", [0.0, 0.0, -9.81])
-        self._pipeline = IdentificationPipeline(
+        pipeline_kwargs = dict(
             tls_scaling=self.tls_scaling,
             acc_cutoff_freq=cutoff_freq,
             gravity=np.array(gravity_list),
+            frame_name=ft_cfg["frame"],
         )
+        if "urdf" in ft_cfg:
+            pipeline_kwargs["urdf_path"] = ft_cfg["urdf"]
+        self._pipeline = IdentificationPipeline(**pipeline_kwargs)
+        rospy.loginfo(f"  Regressor frame: {ft_cfg['frame']}")
 
         # --- Forward kinematics for gripper-tip (tool0) base-frame position ---
         self._fk = Tool0KinematicsCalculator(acc_cutoff_freq=cutoff_freq)
@@ -202,6 +243,15 @@ class ExcitationTrajectoryReplayNode:
             slop=0.01,
         )
         self.ts.registerCallback(self._recording_callback)
+
+        # Raw (payload-uncompensated, uncalibrated counts) F/T from the driver.
+        # Independent subscriber + latest-value cache so a missing topic never
+        # blocks the main synchronized recording above. NaN until first message.
+        raw_topic = rospy.get_param("~wrench_raw_topic", "/ur_hardware_interface/wrench_raw")
+        self._latest_ft_raw = np.full(6, np.nan)
+        self.sub_wrench_raw = rospy.Subscriber(
+            raw_topic, WrenchStamped, self._ft_raw_callback, queue_size=10
+        )
 
         # --- Publishers ---
         self.inertia_pub = rospy.Publisher(
@@ -225,6 +275,13 @@ class ExcitationTrajectoryReplayNode:
     # Data recording callback
     # =========================================================================
 
+    def _ft_raw_callback(self, msg):
+        """Cache the latest raw F/T (uncalibrated counts), snapshotted per frame."""
+        w = msg.wrench
+        self._latest_ft_raw = np.array([
+            w.force.x, w.force.y, w.force.z, w.torque.x, w.torque.y, w.torque.z
+        ])
+
     def _recording_callback(self, joint_msg, wrench_msg):
         if not self.is_recording:
             return
@@ -235,6 +292,13 @@ class ExcitationTrajectoryReplayNode:
         q, v = reorder_joint_state(
             list(joint_msg.name), list(joint_msg.position), list(joint_msg.velocity)
         )
+        # Joint effort = actual_current (wrist_3 idx5 used as a wrist3 transmitted-torque
+        # proxy to test whether Tz tracks the wrist3 axis load). NaN if not published.
+        if len(joint_msg.effort) == len(joint_msg.name):
+            eff_map = dict(zip(joint_msg.name, joint_msg.effort, strict=False))
+            effort = np.array([eff_map.get(n, np.nan) for n in JOINT_ORDER])
+        else:
+            effort = np.full(6, np.nan)
         t = joint_msg.header.stamp.to_sec()
         wrench = np.array([
             wrench_msg.wrench.force.x,
@@ -257,7 +321,9 @@ class ExcitationTrajectoryReplayNode:
             "time": t,
             "joint_position": q.tolist(),
             "joint_velocity": v.tolist(),
+            "joint_effort": effort.tolist(),
             "wrench": wrench.tolist(),
+            "wrench_raw": self._latest_ft_raw.tolist(),
             "tool0_position": tip_pos.tolist(),
             "tool0_velocity": tip_vel_jac.tolist(),
         })
@@ -353,24 +419,43 @@ class ExcitationTrajectoryReplayNode:
     # =========================================================================
 
     def _zero_ftsensor(self):
-        """Call zero_ftsensor service (no-op if disabled via ~zero_ftsensor:=false)."""
+        """Zero the active F/T sensor (no-op if disabled via ~zero_ftsensor:=false).
+
+        Dispatches by ~ft_sensor: "internal" → UR /ur_hardware_interface/zero_ftsensor
+        (std_srvs/Trigger); "ft300s" → Robotiq /robotiq_ft_sensor_acc
+        (robotiq_ft_sensor/sensor_accessor with COMMAND_SET_ZERO = 8).
+        """
         if not self.zero_ftsensor_enabled:
             rospy.logwarn("zero_ftsensor disabled (~zero_ftsensor=false): skipping F/T zeroing.")
             print("  [zero_ftsensor DISABLED] skipping F/T sensor zeroing (recording raw wrench).")
             return
 
-        service_name = "/ur_hardware_interface/zero_ftsensor"
-        print(f"  Calling {service_name}...")
-        try:
-            rospy.wait_for_service(service_name, timeout=5.0)
-            zero_ft = rospy.ServiceProxy(service_name, Trigger)
-            resp = zero_ft()
-            if resp.success:
-                print("  F/T sensor zeroed successfully.")
-            else:
-                rospy.logwarn(f"  zero_ftsensor returned: {resp.message}")
-        except rospy.ROSException as e:
-            rospy.logerr(f"  zero_ftsensor service not available: {e}")
+        if self.ft_sensor_kind == "ft300s":
+            service_name = "/robotiq_ft_sensor_acc"
+            print(f"  Calling {service_name} (COMMAND_SET_ZERO)...")
+            try:
+                rospy.wait_for_service(service_name, timeout=5.0)
+                zero_ft = rospy.ServiceProxy(service_name, sensor_accessor)
+                resp = zero_ft(command_id=8, command="")
+                if resp.success:
+                    print(f"  FT 300-S zeroed successfully: {resp.res}")
+                else:
+                    rospy.logwarn(f"  FT 300-S zero failed: {resp.res}")
+            except rospy.ROSException as e:
+                rospy.logerr(f"  {service_name} service not available: {e}")
+        else:
+            service_name = "/ur_hardware_interface/zero_ftsensor"
+            print(f"  Calling {service_name}...")
+            try:
+                rospy.wait_for_service(service_name, timeout=5.0)
+                zero_ft = rospy.ServiceProxy(service_name, Trigger)
+                resp = zero_ft()
+                if resp.success:
+                    print("  F/T sensor zeroed successfully.")
+                else:
+                    rospy.logwarn(f"  zero_ftsensor returned: {resp.message}")
+            except rospy.ROSException as e:
+                rospy.logerr(f"  zero_ftsensor service not available: {e}")
 
         rospy.sleep(0.5)
 
@@ -469,23 +554,25 @@ class ExcitationTrajectoryReplayNode:
 
         times = np.array([f["time"] for f in self.recorded_frames])
         wrench = np.array([f["wrench"] for f in self.recorded_frames])
+        wrench_raw = np.array([f["wrench_raw"] for f in self.recorded_frames])
         tip_pos = np.array([f["tool0_position"] for f in self.recorded_frames])
         tip_vel_jac = np.array([f["tool0_velocity"] for f in self.recorded_frames])
         # Joint position/velocity (order = JOINT_ORDER, so index 5 = wrist_3) for
         # correlating measured torque against joint-velocity sign reversals.
         joint_pos = np.array([f["joint_position"] for f in self.recorded_frames])
         joint_vel = np.array([f["joint_velocity"] for f in self.recorded_frames])
+        joint_eff = np.array([f["joint_effort"] for f in self.recorded_frames])
 
         # Enforce strictly increasing time so np.gradient stays well-defined
         order = np.argsort(times)
-        times, wrench, tip_pos, tip_vel_jac, joint_pos, joint_vel = (
-            times[order], wrench[order], tip_pos[order], tip_vel_jac[order],
-            joint_pos[order], joint_vel[order],
+        times, wrench, wrench_raw, tip_pos, tip_vel_jac, joint_pos, joint_vel, joint_eff = (
+            times[order], wrench[order], wrench_raw[order], tip_pos[order],
+            tip_vel_jac[order], joint_pos[order], joint_vel[order], joint_eff[order],
         )
         keep = np.concatenate([[True], np.diff(times) > 0])
-        times, wrench, tip_pos, tip_vel_jac, joint_pos, joint_vel = (
-            times[keep], wrench[keep], tip_pos[keep], tip_vel_jac[keep],
-            joint_pos[keep], joint_vel[keep],
+        times, wrench, wrench_raw, tip_pos, tip_vel_jac, joint_pos, joint_vel, joint_eff = (
+            times[keep], wrench[keep], wrench_raw[keep], tip_pos[keep],
+            tip_vel_jac[keep], joint_pos[keep], joint_vel[keep], joint_eff[keep],
         )
 
         if len(times) < 3:
@@ -509,6 +596,8 @@ class ExcitationTrajectoryReplayNode:
             os.path.join(results_dir, "recording.npz"),
             time=times,
             wrench=wrench,
+            wrench_raw=wrench_raw,
+            joint_effort=joint_eff,
             joint_position=joint_pos,
             joint_velocity=joint_vel,
             joint_names=np.array(JOINT_ORDER),
@@ -536,6 +625,20 @@ class ExcitationTrajectoryReplayNode:
         # wrist_3 position turning points where joint velocity reverses).
         w3_idx = JOINT_ORDER.index("wrist_3_joint")
         plot_wrist3_torque(times, joint_pos[:, w3_idx], wrench[:, 5], results_dir)
+        # De-confound: which joint drives the tool-z motion, and does Tz step with it?
+        # Drive/fixed joints are auto-detected from the recorded velocity ranges, so
+        # this works for any single-axis trajectory (shoulder_pan_yaw, wrist3_yaw,
+        # *_pitch) without per-trajectory configuration.
+        plot_tz_via_drive_joint(
+            times, wrench[:, 5], wrench_raw[:, 5], joint_vel, list(JOINT_ORDER), results_dir,
+        )
+        # Per-joint motor current (actual_current via /joint_states.effort), with the
+        # drive joint (e.g. wrist_3 for wrist3_yaw) emphasized and overlaid on its
+        # velocity. Renders a placeholder if effort was never published (all-NaN).
+        plot_joint_currents(
+            times, joint_eff, joint_vel, list(JOINT_ORDER), results_dir,
+            tz=wrench[:, 5],
+        )
         print(f"  Recording data + plots saved to: {results_dir}")
         return results_dir
 
@@ -620,7 +723,7 @@ class ExcitationTrajectoryReplayNode:
         result = self._pipeline.identify(
             trim_start=self.trim_start,
             trim_end=self.trim_end,
-            gripper_cal=self._gripper_cal_params,
+            gripper_cal=gripper_cal,
         )
 
         # Display results
