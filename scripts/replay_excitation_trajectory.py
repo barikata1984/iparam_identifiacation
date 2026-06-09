@@ -723,7 +723,7 @@ class ExcitationTrajectoryReplayNode:
         result = self._pipeline.identify(
             trim_start=self.trim_start,
             trim_end=self.trim_end,
-            gripper_cal=gripper_cal,
+            gripper_cal=self._gripper_cal_params,
         )
 
         # Display results
